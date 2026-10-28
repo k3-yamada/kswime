@@ -1,4 +1,4 @@
-use kswime::{InputSession as Engine, Lang, Model};
+use kswime::{InputSession as Engine, Lang, Learner, Model, Weights};
 use std::sync::OnceLock;
 
 fn model() -> &'static Model<'static> {
@@ -264,4 +264,63 @@ fn secret_mode_pauses_learning() {
     assert_eq!(e.weights(), &before, "but no weight moved");
     assert!(e.corrections().is_empty(), "and no token was remembered");
     assert!(!e.learn_from_expected("repo"));
+}
+
+// ---- learned weights must not drift into nonsense --------------------------
+
+/// The a-priori structural costs (OOV, unknown kana, switches, …) are costs:
+/// a negative one rewards every extra letter of an unknown English token, so
+/// a long unknown string wins as one English word and nothing converts.
+const STRUCTURAL_COSTS: [&str; 10] = [
+    "EN_OOV", "EN_OOV_LETTER", "JA_UNKNOWN_FLAG", "JA_UNKNOWN_KANA", "SWITCH_JA_EN",
+    "SWITCH_EN_JA", "EN_CONTINUE", "EN_SINGLE_LETTER", "PENDING_AFTER_JA", "PENDING_AFTER_EN",
+];
+
+#[test]
+fn loading_a_drifted_weights_file_keeps_structural_costs_non_negative() {
+    let mut e = Engine::new(model());
+    e.weights_mut().load_tsv("EN_OOV_LETTER\t-800\nSWITCH_EN_JA\t-100\nEN_OOV\t-1\n");
+    for name in STRUCTURAL_COSTS {
+        let v = e.weights().get(name).unwrap();
+        assert!(v >= 0.0, "{name} = {v}");
+    }
+}
+
+#[test]
+fn negative_structural_costs_from_a_real_profile_no_longer_swallow_the_sentence() {
+    // The English structural weights of a profile where repeated boundary
+    // nudges (Shift+Left/Right) had pushed EN_OOV_LETTER to -800.  Before the
+    // floor, the whole string was one OOV English word ("exceldetukutta").
+    let drifted = "EN_OOV\t4100\nEN_OOV_LETTER\t-800\nEN_BIAS\t-600\nSWITCH_EN_JA\t900\n";
+    let mut e = Engine::new(model());
+    e.weights_mut().load_tsv(drifted);
+    e.push_str("mitumoriwoexceldetukutta");
+    let p = e.compose(true);
+    assert_eq!(e.render(&p), "見積もりをexcelで作った");
+}
+
+#[test]
+fn the_strength_preset_and_other_learned_rewards_may_stay_negative() {
+    let mut e = Engine::new(model());
+    e.weights_mut().load_tsv("EN_BIAS\t-600\nCAPITAL_EN\t-300\nMORA_VIOLATION\t-200\n");
+    assert_eq!(e.weights().get("EN_BIAS"), Some(-600.0));
+    assert_eq!(e.weights().get("CAPITAL_EN"), Some(-300.0));
+    assert_eq!(e.weights().get("MORA_VIOLATION"), Some(-200.0));
+}
+
+#[test]
+fn a_perceptron_step_cannot_push_a_structural_cost_below_zero() {
+    use kswime::application::weights::{feat, N_FEATURES};
+    let mut w = Weights::default();
+    let mut learner = Learner::default();
+    // The gold path has more OOV letters than the prediction: the step lowers
+    // EN_OOV_LETTER.  Repeat far past what a sane profile would see.
+    let mut predicted = vec![0.0; N_FEATURES];
+    let mut gold = vec![0.0; N_FEATURES];
+    predicted[feat::EN_OOV_LETTER] = 1.0;
+    gold[feat::EN_OOV_LETTER] = 4.0;
+    for _ in 0..50 {
+        learner.update(&mut w, &predicted, &gold);
+    }
+    assert!(w.w[feat::EN_OOV_LETTER] >= 0.0, "{}", w.w[feat::EN_OOV_LETTER]);
 }

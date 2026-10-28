@@ -11,7 +11,7 @@
 //! band; indicator weights move in Mozc units and are bounded.  Nothing is
 //! learned when the prediction already equals the gold path.
 
-use crate::application::weights::{Kind, Weights, FEATURE_KINDS, N_FEATURES};
+use crate::application::weights::{lower_bound, Kind, Weights, FEATURE_KINDS, N_FEATURES};
 
 #[derive(Debug, Clone)]
 pub struct Learner {
@@ -46,7 +46,8 @@ impl Learner {
             }
             match FEATURE_KINDS[k] {
                 Kind::Indicator => {
-                    w.w[k] = (w.w[k] + self.lr_indicator * d.signum() * d.abs().min(3.0)).clamp(-self.indicator_bound, self.indicator_bound);
+                    let lowest = lower_bound(k).max(-self.indicator_bound);
+                    w.w[k] = (w.w[k] + self.lr_indicator * d.signum() * d.abs().min(3.0)).clamp(lowest, self.indicator_bound);
                 }
                 Kind::Cost => {
                     w.w[k] = (w.w[k] + self.lr_cost * (d / 1000.0).clamp(-3.0, 3.0)).clamp(self.cost_min, self.cost_max);

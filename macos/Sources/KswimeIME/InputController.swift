@@ -21,10 +21,81 @@ final class KswimeInputController: IMKInputController {
     private let engine = Engine()
     private let panel = CandidatePanel()
     private var mode: Mode = .auto
-    /// Space was pressed on a Japanese run: the candidate window is open and
-    /// Space / arrows / digits operate on it.
+    /// The user is editing the composition (Space on a Japanese run, or an
+    /// arrow key): the judgement is final, one piece has the focus, and
+    /// Space / Tab / Up / Down / digits / F6 / F7 / F10 act on that piece.
+    /// Left / Right move the focus, Shift+Left / Shift+Right move its right
+    /// boundary.  Typing a character leaves editing and appends.
     private var candidateMode = false
+    /// Index into `lastPieces` of the focused piece while editing.
+    private var focus: Int?
     private var lastPieces: [Piece] = []
+
+    /// Pieces the focus can land on (words, not punctuation or spaces).
+    private func focusable(_ i: Int) -> Bool { lastPieces[i].lang != .neutral }
+
+    /// The focused piece, defaulting to the last word.
+    private var focusedIndex: Int? {
+        if let f = focus, f < lastPieces.count, focusable(f) { return f }
+        return lastPieces.lastIndex(where: { $0.lang != .neutral })
+    }
+
+    /// Engine "run" number of a piece: pieces with candidates, counted in order.
+    private func runIndex(of piece: Int) -> Int? {
+        guard piece < lastPieces.count, !lastPieces[piece].candidates.isEmpty else { return nil }
+        return lastPieces[..<piece].filter { !$0.candidates.isEmpty }.count
+    }
+
+    private func beginEditing(_ client: IMKTextInput) {
+        if !candidateMode {
+            candidateMode = true
+            render(client)   // final judgement; piece indexes may change
+            focus = focusedIndex
+        }
+    }
+
+    private func moveFocus(_ step: Int, _ client: IMKTextInput) {
+        beginEditing(client)
+        guard var i = focusedIndex else { return }
+        var j = i + step
+        while j >= 0 && j < lastPieces.count {
+            if focusable(j) { i = j; break }
+            j += step
+        }
+        focus = i
+        render(client)
+    }
+
+    private func cycleCandidate(_ step: Int, _ client: IMKTextInput) {
+        beginEditing(client)
+        guard let i = focusedIndex, let run = runIndex(of: i) else { render(client); return }
+        engine.nextCandidate(run: run, step: step)
+        render(client)
+    }
+
+    /// Move the right boundary of the focused piece by one keystroke: +1
+    /// takes the next keystroke into this piece's language, -1 gives the
+    /// last keystroke to the following word's language (or the other
+    /// language).  Boundaries inside one Japanese run are the converter's;
+    /// this moves language boundaries.  Learns like F6/F10.
+    private func moveBoundary(_ delta: Int, _ client: IMKTextInput) {
+        beginEditing(client)
+        guard let i = focusedIndex else { return }
+        let p = lastPieces[i]
+        let total = engine.bufferLength
+        if delta > 0 {
+            guard p.end < total else { return }
+            engine.forceLanguage(start: p.start, end: p.end + 1, lang: p.lang)
+        } else {
+            guard p.end - p.start > 1 else { return }
+            let next = lastPieces[(i + 1)...].first(where: { $0.lang != .neutral })?.lang
+            let other: PieceLang = next ?? (p.lang == .japanese ? .english : .japanese)
+            engine.forceLanguage(start: p.end - 1, end: p.end, lang: other)
+        }
+        render(client)
+        focus = lastPieces.firstIndex(where: { $0.start <= p.start && p.start < $0.end && $0.lang != .neutral }) ?? focusedIndex
+        render(client)
+    }
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
@@ -104,7 +175,7 @@ final class KswimeInputController: IMKInputController {
             i.tag = tag
             return i
         }
-        m.addItem(item("直前の語の日本語／英語を反転して学習 (F6/F10)", #selector(menuToggleLanguage)))
+        m.addItem(item("選択中の語の日本語／英語を反転して学習 (F6/F10)", #selector(menuToggleLanguage)))
         m.addItem(NSMenuItem.separator())
         let s = Settings.shared.strength
         m.addItem(item("判定: 英語寄り", #selector(menuStrength(_:)), checked: s == 0, tag: 0))
@@ -196,12 +267,14 @@ final class KswimeInputController: IMKInputController {
             guard !engine.isEmpty else { return false }
             engine.clear()
             candidateMode = false
+            focus = nil
             render(client)
             return true
         case kVK_Delete:
             guard !engine.isEmpty else { return false }
             if candidateMode {
                 candidateMode = false
+                focus = nil
             } else {
                 engine.backspace()
             }
@@ -212,26 +285,37 @@ final class KswimeInputController: IMKInputController {
                 if !engine.isEmpty { commitIfNeeded() }
                 return false
             }
-            candidateMode = true
-            engine.nextCandidate(step: flags.contains(.shift) ? -1 : 1)
+            cycleCandidate(flags.contains(.shift) ? -1 : 1, client)
+            return true
+        case kVK_DownArrow where !engine.isEmpty:
+            cycleCandidate(1, client)
+            return true
+        case kVK_UpArrow where !engine.isEmpty:
+            cycleCandidate(-1, client)
+            return true
+        case kVK_LeftArrow where !engine.isEmpty:
+            if flags.contains(.shift) { moveBoundary(-1, client) } else { moveFocus(-1, client) }
+            return true
+        case kVK_RightArrow where !engine.isEmpty:
+            if flags.contains(.shift) { moveBoundary(1, client) } else { moveFocus(1, client) }
+            return true
+        case kVK_Home where !engine.isEmpty:
+            beginEditing(client)
+            focus = lastPieces.firstIndex(where: { $0.lang != .neutral })
             render(client)
             return true
-        case kVK_DownArrow where candidateMode:
-            engine.nextCandidate(step: 1)
-            render(client)
-            return true
-        case kVK_UpArrow where candidateMode:
-            engine.nextCandidate(step: -1)
+        case kVK_End where !engine.isEmpty:
+            beginEditing(client)
+            focus = lastPieces.lastIndex(where: { $0.lang != .neutral })
             render(client)
             return true
         case kVK_F6:
-            return forceLastLanguage(.japanese, client)
+            return selectHiragana(client)
         case kVK_F7:
             return selectKatakana(client)
         case kVK_F10:
-            return forceLastLanguage(.english, client)
+            return forceFocusedLanguage(.english, client)
         case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown:
-            if !engine.isEmpty { commitIfNeeded() }
             return false
         default:
             break
@@ -250,18 +334,18 @@ final class KswimeInputController: IMKInputController {
 
         if candidateMode {
             if chars == " " {
-                engine.nextCandidate(step: flags.contains(.shift) ? -1 : 1)
+                cycleCandidate(flags.contains(.shift) ? -1 : 1, client)
+                return true
+            }
+            if let d = Int(chars), (1...9).contains(d), let i = focusedIndex, let run = runIndex(of: i) {
+                let selected = lastPieces[i].selected
+                engine.selectCandidate(run: run, index: (selected / 9) * 9 + d - 1)
                 render(client)
                 return true
             }
-            if let d = Int(chars), (1...9).contains(d) {
-                let selected = lastPieces.last(where: { $0.candidates.count > 1 })?.selected ?? 0
-                engine.selectCandidate(index: (selected / 9) * 9 + d - 1)
-                commitIfNeeded()
-                return true
-            }
-            // any other key: accept the candidate and continue typing
+            // any other key: accept the candidates and continue typing
             candidateMode = false
+            focus = nil
         }
 
         if chars == " ", !engine.isEmpty, !flags.contains(.shift) {
@@ -273,8 +357,7 @@ final class KswimeInputController: IMKInputController {
             // always inserts a space.
             let decided = engine.compose(final: true)
             if decided.last(where: { $0.lang != .neutral })?.lang == .japanese {
-                candidateMode = true
-                render(client)
+                beginEditing(client)
                 return true
             }
         }
@@ -301,27 +384,51 @@ final class KswimeInputController: IMKInputController {
             return
         }
         let text = NSMutableAttributedString()
-        let lastJapanese = pieces.lastIndex(where: { $0.candidates.count > 1 })
+        let focused: Int? = candidateMode ? focusedIndex : nil
+        let shown = focused ?? pieces.lastIndex(where: { $0.candidates.count > 1 })
+        var focusedRange: NSRange?
         for (i, p) in pieces.enumerated() {
             // confidence drives the underline: confident = thin, tentative or
-            // undecided = raw (dotted) so the eye lands on what may be wrong
+            // undecided = raw (dotted) so the eye lands on what may be wrong;
+            // the focused piece is drawn as the selected segment
             let style: Int
-            switch p.lang {
-            case .japanese: style = (candidateMode && i == lastJapanese) ? kTSMHiliteSelectedConvertedText : (p.confidence == 0 ? kTSMHiliteConvertedText : kTSMHiliteRawText)
-            case .english: style = p.confidence == 0 ? kTSMHiliteConvertedText : kTSMHiliteRawText
-            case .neutral: style = p.pending ? kTSMHiliteRawText : kTSMHiliteConvertedText
+            if i == focused {
+                style = kTSMHiliteSelectedConvertedText
+            } else {
+                switch p.lang {
+                case .japanese, .english: style = p.confidence == 0 ? kTSMHiliteConvertedText : kTSMHiliteRawText
+                case .neutral: style = p.pending ? kTSMHiliteRawText : kTSMHiliteConvertedText
+                }
             }
             var attrs = mark(forStyle: style, at: NSRange(location: text.length, length: p.text.utf16.count)) as? [NSAttributedString.Key: Any] ?? [:]
             if p.confidence == 2 { attrs[.foregroundColor] = NSColor.secondaryLabelColor }
+            if i == focused {
+                // Hosts draw the selected range (not the attributes) as the
+                // highlighted segment, so the selection follows the focus.
+                focusedRange = NSRange(location: text.length, length: p.text.utf16.count)
+                // kTSMHiliteSelectedConvertedText alone is hard to tell from the
+                // other underlines in many hosts, so say it explicitly.
+                attrs[.underlineStyle] = NSUnderlineStyle.thick.rawValue
+                attrs[.underlineColor] = NSColor.controlAccentColor
+                attrs[.markedClauseSegment] = i
+            }
             text.append(NSAttributedString(string: p.text, attributes: attrs))
         }
-        client.setMarkedText(text, selectionRange: NSRange(location: text.length, length: 0), replacementRange: notFound)
+        client.setMarkedText(text, selectionRange: focusedRange ?? NSRange(location: text.length, length: 0), replacementRange: notFound)
 
-        if let idx = lastJapanese, candidateMode || Settings.shared.liveCandidates, pieces[idx].candidates.count > 1 {
+        if let idx = shown, candidateMode || Settings.shared.liveCandidates, pieces[idx].candidates.count > 1 {
             var rect = NSRect.zero
             client.attributes(forCharacterIndex: 0, lineHeightRectangle: &rect)
+            var title: String?
+            if candidateMode {
+                let words = pieces.indices.filter { pieces[$0].lang != .neutral }
+                if let n = words.firstIndex(of: idx) {
+                    let p = pieces[idx]
+                    title = "\(n + 1)/\(words.count)  \(p.lang == .japanese ? p.kana : p.text)"
+                }
+            }
             panel.show(candidates: pieces[idx].candidates, selected: pieces[idx].selected, caret: rect,
-                       level: NSWindow.Level(rawValue: Int(client.windowLevel()) + 1))
+                       level: NSWindow.Level(rawValue: Int(client.windowLevel()) + 1), title: title)
         } else {
             panel.hide()
         }
@@ -335,6 +442,7 @@ final class KswimeInputController: IMKInputController {
         let text = engine.commit()
         Settings.shared.appendRecord(before: lastBefore, typed: typed, committed: text)
         candidateMode = false
+        focus = nil
         lastPieces = []
         client.setMarkedText(NSAttributedString(string: ""), selectionRange: NSRange(location: 0, length: 0), replacementRange: notFound)
         client.insertText(text, replacementRange: notFound)
@@ -343,28 +451,56 @@ final class KswimeInputController: IMKInputController {
 
     private func toggleLastLanguage() {
         guard !engine.isEmpty, let client = client() else { return }
-        _ = engine.toggleLastLanguage()
-        candidateMode = false
-        render(client)
+        if let i = focusedIndex {
+            let p = lastPieces[i]
+            _ = forceFocusedLanguage(p.lang == .japanese ? .english : .japanese, client)
+        } else {
+            _ = engine.toggleLastLanguage()
+            render(client)
+        }
     }
 
-    private func forceLastLanguage(_ lang: PieceLang, _ client: IMKTextInput) -> Bool {
-        guard !engine.isEmpty, let last = lastPieces.last(where: { $0.lang != .neutral }) else { return false }
-        if last.lang != lang {
-            engine.forceLanguage(start: last.start, end: last.end, lang: lang)
+    /// F6 / F10: the focused word (the last word unless the user moved the
+    /// focus) becomes Japanese / English for this composition, and the
+    /// engine learns from it.  Editing continues on the same word.
+    private func forceFocusedLanguage(_ lang: PieceLang, _ client: IMKTextInput) -> Bool {
+        guard !engine.isEmpty else { return false }
+        beginEditing(client)
+        guard let i = focusedIndex else { return false }
+        let p = lastPieces[i]
+        if p.lang != lang {
+            engine.forceLanguage(start: p.start, end: p.end, lang: lang)
         }
-        candidateMode = false
+        render(client)
+        focus = lastPieces.firstIndex(where: { $0.start <= p.start && p.start < $0.end && $0.lang != .neutral })
         render(client)
         return true
     }
 
+    /// F6 (the Japanese IME convention): the focused word in hiragana.  A word
+    /// judged English becomes Japanese first, and the engine learns from that.
+    private func selectHiragana(_ client: IMKTextInput) -> Bool {
+        guard forceFocusedLanguage(.japanese, client) else { return false }
+        guard let i = focusedIndex, lastPieces[i].lang == .japanese, let run = runIndex(of: i) else { return true }
+        let p = lastPieces[i]
+        if let k = p.candidates.firstIndex(of: p.kana) {
+            engine.selectCandidate(run: run, index: k)
+            render(client)
+        }
+        return true
+    }
+
+    /// F7: the focused Japanese word in katakana.
     private func selectKatakana(_ client: IMKTextInput) -> Bool {
-        guard let last = lastPieces.last(where: { $0.lang == .japanese }) else { return false }
-        let kata = String(last.kana.unicodeScalars.map { s -> Character in
+        guard !engine.isEmpty else { return false }
+        beginEditing(client)
+        guard let i = focusedIndex, lastPieces[i].lang == .japanese, let run = runIndex(of: i) else { return true }
+        let p = lastPieces[i]
+        let kata = String(p.kana.unicodeScalars.map { s -> Character in
             (0x3041...0x3096).contains(s.value) ? Character(UnicodeScalar(s.value + 0x60)!) : Character(s)
         })
-        if let i = last.candidates.firstIndex(of: kata) {
-            engine.selectCandidate(index: i)
+        if let k = p.candidates.firstIndex(of: kata) {
+            engine.selectCandidate(run: run, index: k)
             render(client)
         }
         return true
