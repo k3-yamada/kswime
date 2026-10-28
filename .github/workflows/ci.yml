@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]   # master: kswime-dev, main: public kswime
   pull_request:
 
 env:

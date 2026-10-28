@@ -46,9 +46,18 @@ final class CandidatePanel {
     /// Show `candidates` (at most 9 shown, numbered) with `selected`
     /// highlighted, placed under the caret rectangle `caret` (screen
     /// coordinates).  `level` is the client window level + 1.
-    func show(candidates: [String], selected: Int, caret: NSRect, level: NSWindow.Level) {
+    func show(candidates: [String], selected: Int, caret: NSRect, level: NSWindow.Level, title: String? = nil) {
         for l in labels { stack.removeArrangedSubview(l); l.removeFromSuperview() }
         labels.removeAll()
+        // Some hosts (Warp) draw neither the selected range nor attributes of
+        // the marked text, so the window itself names the word being edited.
+        if let title {
+            let header = NSTextField(labelWithString: title)
+            header.font = NSFont.systemFont(ofSize: 11)
+            header.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(header)
+            labels.append(header)
+        }
         let page = max(0, selected / 9)
         let start = page * 9
         let slice = Array(candidates[start..<min(candidates.count, start + 9)])

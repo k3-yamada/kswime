@@ -78,6 +78,21 @@ features! {
     MORA_VIOLATION   = 34, Indicator, 0.0, "per consonant cluster an English token has that Japanese phonotactics forbid (negative favours English)";
 }
 
+/// Lowest value weight `i` may take, whether learned or loaded from a file.
+///
+/// The a-priori structural indicators (OOV, unknown kana, switches, …) are
+/// costs.  Learning that drives one below zero rewards every extra letter of
+/// an unknown English token, so a long unknown string wins as a single English
+/// word and nothing converts.  `EN_BIAS` is the strength preset and the
+/// heuristics are rewards by design, so they stay unbounded below.
+pub fn lower_bound(i: usize) -> f32 {
+    match i {
+        feat::EN_BIAS => f32::NEG_INFINITY,
+        feat::EN_OOV..=feat::PENDING_AFTER_EN => 0.0,
+        _ => f32::NEG_INFINITY,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Weights {
     pub w: [f32; N_FEATURES],
@@ -99,7 +114,7 @@ impl Weights {
     pub fn set(&mut self, name: &str, v: f32) -> bool {
         match FEATURE_NAMES.iter().position(|n| n.eq_ignore_ascii_case(name)) {
             Some(i) => {
-                self.w[i] = v;
+                self.w[i] = v.max(lower_bound(i));
                 true
             }
             None => false,
