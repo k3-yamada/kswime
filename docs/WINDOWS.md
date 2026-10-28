@@ -10,7 +10,8 @@ macOS 版（`macos/`）と同じく、エンジンの C ABI の上に薄い入�
 |---|---|---|
 | エンジン（lib と bin 2 本）が `x86_64-pc-windows-msvc` で型検査を通る | 通る（エラー 0） | `cargo check --target x86_64-pc-windows-msvc --lib --bins --release`（macOS 上） |
 | Unix 専用のコード | 2 か所だけ。いずれもエンジン本体ではない | `src/presentation/tui.rs`（端末の対話入力）、`src/presentation/cli.rs:369`（`bench` の常駐メモリ計測が `/proc/self/statm`） |
-| リンクとテスト | **未確認**（MSVC が要る） | CI の `engine (Windows, MSVC)` ジョブが確かめる（`.github/workflows/ci.yml`） |
+| MSVC でのリンクとテスト | **通る**。`cargo build --release --lib --bins` と `cargo test --release`（統合テスト 37 件）が成功し、`kswime.dll`（約 63 MB）と `kswime.dll.lib` ができる | 公開側の CI `engine (Windows, MSVC)` ジョブ（2026-10-28、`windows-latest`） |
+| C ABI のスモークテスト（`tests/c/smoke.c`） | **Windows では未実施**（`cl.exe` の環境変数の準備が要る） | 第 2 段階までに足す |
 
 `kswime.lib`（`staticlib`）と `kswime.dll`（`cdylib`）は、MSVC では `libkswime.a` / `libkswime.dylib` と名前が違う。CI はこの 3 ファイル（`kswime.lib`、`kswime.dll`、`kswime.dll.lib`）ができることまで確かめる。
 
@@ -78,7 +79,7 @@ windows/                     Windows シェル（別の crate。windows crate �
 ## 7. 段階
 
 1. **第 0 段階（済）**: 型検査が通ることの確認。CI に `engine (Windows, MSVC)` ジョブを追加。
-2. **第 1 段階**: CI の Windows ジョブが通ることを確かめる（リンクとテスト）。公開側 `kswime` で最初に動く。
+2. **第 1 段階（済）**: CI の Windows ジョブが通ることの確認（リンクとテスト）。公開側 `kswime` で通った（2026-10-28）。
 3. **第 2 段階**: `windows/` の骨組み（COM の DLL、登録、キー入力を食って文字を確定するだけ）。実機で、メモ帳に打てるところまで。
 4. **第 3 段階**: 変換中の文字の表示、候補窓、編集モード（← / →、Shift+← / →、F6/F7/F10）。
 5. **第 4 段階**: 32 ビット版、署名、インストーラー、ストアアプリ対応。
