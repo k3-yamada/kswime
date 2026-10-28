@@ -111,6 +111,9 @@ final class Engine {
     /// Force keystrokes [start, end) to `lang` for this composition and learn.
     func forceLanguage(start: Int, end: Int, lang: PieceLang) { ksw_force_language(handle, Int32(start), Int32(end), lang.rawValue) }
 
+    /// Move a boundary without learning; the engine learns the final result once.
+    func nudgeLanguage(start: Int, end: Int, lang: PieceLang) { ksw_nudge_language(handle, Int32(start), Int32(end), lang.rawValue) }
+
     var weightsTSV: String { String(cString: ksw_export_weights(handle)) }
     func importWeights(_ text: String) { ksw_import_weights(handle, text) }
     func resetLearning() { ksw_reset_learning(handle) }

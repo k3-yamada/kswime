@@ -84,3 +84,26 @@ jobs:
           name: Kswime.app
           path: macos/build/Kswime.app
           retention-days: 7
+
+  # The engine and its C ABI (kswime.lib / kswime.dll) must build and pass the
+  # tests with MSVC before a Windows TSF shell is written on top of it
+  # (docs/WINDOWS.md).  The model is the one the Linux job generated.
+  windows:
+    name: engine (Windows, MSVC)
+    runs-on: windows-latest
+    needs: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: model.bin
+          path: data
+      - name: Build (engine, C ABI, CLI)
+        run: cargo build --release --lib --bins
+      - name: Test
+        run: cargo test --release
+      - name: C ABI artifacts
+        shell: bash
+        run: ls -la target/release/kswime.lib target/release/kswime.dll target/release/kswime.dll.lib

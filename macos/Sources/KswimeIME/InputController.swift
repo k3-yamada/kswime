@@ -77,7 +77,8 @@ final class KswimeInputController: IMKInputController {
     /// takes the next keystroke into this piece's language, -1 gives the
     /// last keystroke to the following word's language (or the other
     /// language).  Boundaries inside one Japanese run are the converter's;
-    /// this moves language boundaries.  Learns like F6/F10.
+    /// this moves language boundaries.  Nothing is learned per key press: the
+    /// engine learns the final boundary once, on commit or when typing goes on.
     private func moveBoundary(_ delta: Int, _ client: IMKTextInput) {
         beginEditing(client)
         guard let i = focusedIndex else { return }
@@ -85,12 +86,12 @@ final class KswimeInputController: IMKInputController {
         let total = engine.bufferLength
         if delta > 0 {
             guard p.end < total else { return }
-            engine.forceLanguage(start: p.start, end: p.end + 1, lang: p.lang)
+            engine.nudgeLanguage(start: p.start, end: p.end + 1, lang: p.lang)
         } else {
             guard p.end - p.start > 1 else { return }
             let next = lastPieces[(i + 1)...].first(where: { $0.lang != .neutral })?.lang
             let other: PieceLang = next ?? (p.lang == .japanese ? .english : .japanese)
-            engine.forceLanguage(start: p.end - 1, end: p.end, lang: other)
+            engine.nudgeLanguage(start: p.end - 1, end: p.end, lang: other)
         }
         render(client)
         focus = lastPieces.firstIndex(where: { $0.start <= p.start && p.start < $0.end && $0.lang != .neutral }) ?? focusedIndex

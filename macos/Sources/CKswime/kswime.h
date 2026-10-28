@@ -66,6 +66,10 @@ int32_t     ksw_select_candidate(KswEngine *e, int32_t run, int32_t index);
  * persists both exports between sessions. */
 int32_t     ksw_toggle_last_language(KswEngine *e);  /* new lang, -1 if empty */
 void        ksw_force_language(KswEngine *e, int32_t start, int32_t end, int32_t lang);
+/* Same, but without learning: for moving a boundary one keystroke at a time.
+ * The adjustment is learned once, on ksw_commit or the next ksw_push;
+ * ksw_backspace and ksw_clear discard it. */
+void        ksw_nudge_language(KswEngine *e, int32_t start, int32_t end, int32_t lang);
 void        ksw_feedback(KswEngine *e, const char *token, int32_t lang);
 const char *ksw_export_corrections(KswEngine *e);    /* "token\tbias\n"... */
 void        ksw_import_corrections(KswEngine *e, const char *text);

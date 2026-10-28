@@ -1,3 +1,5 @@
+use kswime::application::convert::{convert as convert_plain, convert_with_cuts};
+use kswime::domain::PosGrammar;
 use kswime::{InputSession as Engine, Lang, Learner, Model, Weights};
 use std::sync::OnceLock;
 
@@ -323,4 +325,235 @@ fn a_perceptron_step_cannot_push_a_structural_cost_below_zero() {
         learner.update(&mut w, &predicted, &gold);
     }
     assert!(w.w[feat::EN_OOV_LETTER] >= 0.0, "{}", w.w[feat::EN_OOV_LETTER]);
+}
+
+// ---- boundary nudges learn once, when the composition is settled -----------
+
+const NUDGE_INPUT: &str = "mitumoriwoexceldetukutta";
+/// `excel` starts at keystroke 11 (after "mitumoriwo").
+const EXCEL_START: usize = 10;
+
+/// Stretch the English word to the right one keystroke at a time, the way
+/// repeated Shift+Right does.
+fn nudge_english_right(e: &mut Engine, times: usize) {
+    for n in 1..=times {
+        e.nudge_language(EXCEL_START, EXCEL_START + 5 + n, Lang::En);
+    }
+}
+
+#[test]
+fn nudging_a_boundary_learns_nothing_until_the_composition_is_settled() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    let (weights, updates) = (e.weights().clone(), e.learner().updates);
+    nudge_english_right(&mut e, 4);
+    assert_eq!(e.weights(), &weights, "no weight moved while nudging");
+    assert_eq!(e.learner().updates, updates);
+    assert!(e.corrections().is_empty(), "and no half-typed token was remembered");
+    let shown = e.render(&e.compose(true));
+    assert!(shown.contains("exceldetu"), "but the boundary did move: {shown}");
+}
+
+#[test]
+fn many_nudges_make_exactly_one_update_and_remember_whole_words_only_on_commit() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    let (weights, updates) = (e.weights().clone(), e.learner().updates);
+    nudge_english_right(&mut e, 9);
+    e.commit();
+    assert_eq!(e.learner().updates, updates + 1, "exactly one perceptron step");
+    assert_ne!(e.weights(), &weights, "and it moved the weights");
+    // Stretched to the end, the English range covers the words the engine
+    // sees there ("exceldetu", "kutta"): whole words, never the fragments
+    // passed on the way (e, ex, exc, …), and all of them English.
+    let learned = e.corrections();
+    assert!(!learned.is_empty());
+    for (token, bias) in &learned {
+        assert!(token.chars().count() >= 3, "fragment remembered: {token:?}");
+        assert!(*bias < 0, "{token:?} was moved to English, got {bias}");
+    }
+}
+
+#[test]
+fn entering_secret_mode_after_nudging_keeps_the_weights_still_on_commit() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    let weights = e.weights().clone();
+    nudge_english_right(&mut e, 4);
+    e.learning_paused = true; // the menu toggle, then Return
+    e.commit();
+    assert_eq!(e.weights(), &weights, "secret mode: no weight moves");
+    assert!(e.corrections().is_empty());
+}
+
+#[test]
+fn shrinking_a_word_never_remembers_a_fragment() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    // Shift+Left on `excel`: its last keystroke goes to the other language.
+    // `l` cannot be Japanese, so the display does not change.
+    e.nudge_language(EXCEL_START + 4, EXCEL_START + 5, Lang::Ja);
+    e.commit();
+    assert!(e.corrections().is_empty(), "no fragment such as \"l\" or \"el\": {:?}", e.corrections());
+}
+
+#[test]
+fn growing_then_shrinking_remembers_whole_words_only() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    nudge_english_right(&mut e, 2);
+    e.nudge_language(EXCEL_START + 6, EXCEL_START + 7, Lang::Ja);
+    e.commit();
+    for (token, _) in e.corrections() {
+        assert!(token.chars().count() >= 3, "a one- or two-letter fragment was remembered: {token:?}");
+    }
+}
+
+#[test]
+fn forcing_a_word_after_nudging_it_is_learned_once_not_twice() {
+    // Shift+Right a few times, then F6/F10 on the same range: the forced word
+    // is learned by force_language itself; settling must not count it again.
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    nudge_english_right(&mut e, 3);
+    let updates = e.learner().updates;
+    let forced = e.force_language(EXCEL_START, EXCEL_START + 8, Lang::En);
+    assert_eq!(forced, "exceldet");
+    let after_force = (e.learner().updates, e.weights().clone(), e.corrections());
+    e.commit();
+    assert_eq!(after_force.0, updates + 1, "force_language took its own single step");
+    assert_eq!(e.learner().updates, after_force.0, "and commit added no second step");
+    assert_eq!(e.weights(), &after_force.1);
+    assert_eq!(e.corrections(), after_force.2, "no token remembered twice");
+}
+
+#[test]
+fn erasing_learning_discards_a_pending_boundary_adjustment() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    nudge_english_right(&mut e, 4);
+    e.discard_pending_learning(); // what "erase all learning" calls
+    let weights = e.weights().clone();
+    e.commit();
+    assert_eq!(e.weights(), &weights, "the erased profile stays erased");
+    assert!(e.corrections().is_empty());
+}
+
+#[test]
+fn a_boundary_adjustment_made_in_secret_mode_never_leaks_into_a_later_one() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    e.learning_paused = true;
+    nudge_english_right(&mut e, 4); // private
+    e.learning_paused = false;
+    let weights = e.weights().clone();
+    // A no-op adjustment (already Japanese) must not drag the private one along.
+    e.nudge_language(0, 2, Lang::Ja);
+    e.commit();
+    assert_eq!(e.weights(), &weights);
+}
+
+#[test]
+fn clearing_the_composition_discards_the_nudges() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    let weights = e.weights().clone();
+    nudge_english_right(&mut e, 5);
+    e.clear();
+    e.push_str("kyou");
+    e.commit();
+    assert_eq!(e.weights(), &weights);
+    assert!(e.corrections().is_empty());
+}
+
+#[test]
+fn backspace_after_nudging_discards_the_nudges() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    let weights = e.weights().clone();
+    nudge_english_right(&mut e, 3);
+    e.backspace();
+    e.commit();
+    assert_eq!(e.weights(), &weights);
+    assert!(e.corrections().is_empty());
+}
+
+#[test]
+fn typing_on_after_nudging_settles_the_nudges() {
+    let mut e = Engine::new(model());
+    e.push_str(NUDGE_INPUT);
+    nudge_english_right(&mut e, 3);
+    e.push('x');
+    assert_eq!(e.corrections().len(), 1, "typing on ends the operation and learns it once");
+}
+
+#[test]
+fn nudging_in_secret_mode_still_moves_the_boundary_but_never_learns() {
+    let mut e = Engine::new(model());
+    e.learning_paused = true;
+    e.push_str(NUDGE_INPUT);
+    let weights = e.weights().clone();
+    nudge_english_right(&mut e, 4);
+    e.commit();
+    assert_eq!(e.weights(), &weights);
+    assert!(e.corrections().is_empty());
+}
+
+// ---- a bunsetsu boundary the user forces inside one Japanese run ------------
+
+/// N-best surfaces of `kana` with the given forced cuts (kana positions: a
+/// bunsetsu boundary is forced right before each).
+fn surfaces_with_cuts(kana: &str, cuts: &[usize]) -> Vec<String> {
+    let chars: Vec<char> = kana.chars().collect();
+    let kb = model();
+    convert_with_cuts(kb, &chars, kb.pos().bos, true, 8, true, cuts).into_iter().map(|c| c.surface).collect()
+}
+
+#[test]
+fn a_forced_cut_stops_a_word_from_straddling_it() {
+    // しんかんせん is best converted as one word, 新幹線 (positions 0..6).
+    assert_eq!(surfaces_with_cuts("しんかんせん", &[])[0], "新幹線");
+    let cut = surfaces_with_cuts("しんかんせん", &[3]);
+    assert_ne!(cut[0], "新幹線", "no word may cross the boundary between しんかん and せん: {cut:?}");
+}
+
+#[test]
+fn a_cut_where_the_grammar_already_splits_keeps_the_best_candidate() {
+    let free = surfaces_with_cuts("ふるさとのやま", &[]);
+    assert_eq!(free[0], "ふるさとの山");
+    // ふるさとの | やま: a particle ends its bunsetsu, so this boundary is
+    // already the grammar's.  Only the best candidate is guaranteed to stay:
+    // lower ones that straddled the cut are gone, which is what a cut means.
+    let cut = surfaces_with_cuts("ふるさとのやま", &[5]);
+    assert_eq!(cut[0], free[0], "free {free:?} / cut {cut:?}");
+}
+
+#[test]
+fn a_cut_applies_even_where_the_grammar_would_continue_the_bunsetsu() {
+    // ふるさと | のやま: the grammar keeps の with ふるさと.  Forcing a boundary
+    // there makes の start a bunsetsu, which changes the best reading.
+    let free = surfaces_with_cuts("ふるさとのやま", &[]);
+    let cut = surfaces_with_cuts("ふるさとのやま", &[4]);
+    assert_ne!(cut[0], free[0], "free {free:?} / cut {cut:?}");
+}
+
+#[test]
+fn without_cuts_the_new_entry_point_is_the_old_convert() {
+    let chars: Vec<char> = "ふるさとのやま".chars().collect();
+    let kb = model();
+    let old: Vec<String> = convert_plain(kb, &chars, kb.pos().bos, true, 8, true).into_iter().map(|c| c.surface).collect();
+    assert_eq!(surfaces_with_cuts("ふるさとのやま", &[]), old);
+}
+
+#[test]
+fn cuts_at_the_ends_or_beyond_are_ignored() {
+    let free = surfaces_with_cuts("しんかんせん", &[]);
+    assert_eq!(surfaces_with_cuts("しんかんせん", &[0, 6, 7, 100]), free);
+}
+
+#[test]
+fn plain_hiragana_and_katakana_stay_available_whatever_the_cuts() {
+    let cut = surfaces_with_cuts("しんかんせん", &[3]);
+    assert!(cut.contains(&"しんかんせん".to_string()), "{cut:?}");
+    assert!(cut.contains(&"シンカンセン".to_string()), "{cut:?}");
 }

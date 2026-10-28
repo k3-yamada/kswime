@@ -24,6 +24,11 @@ pub struct InputSession<'k> {
     choices: HashMap<usize, usize>,
     /// keystroke languages the user forced in this composition
     forced: Vec<Option<Lang>>,
+    /// keystrokes moved by boundary nudges (Shift+arrow): learned once, when
+    /// the composition settles, not once per key press
+    nudged: Vec<bool>,
+    /// a boundary adjustment is waiting to be learned
+    nudge_pending: bool,
     /// learning from accepted commits (perceptron) on/off
     pub learn_on_commit: bool,
     /// secret mode: corrections still apply to the current composition but
@@ -44,6 +49,8 @@ impl<'k> InputSession<'k> {
             corrections: HashMap::new(),
             choices: HashMap::new(),
             forced: Vec::new(),
+            nudged: Vec::new(),
+            nudge_pending: false,
             learn_on_commit: true,
             learning_paused: false,
         }
@@ -115,8 +122,11 @@ impl<'k> InputSession<'k> {
     }
 
     pub fn push(&mut self, c: char) {
+        // Typing on ends a boundary adjustment: learn it now, once.
+        self.settle_nudges();
         self.buffer.push(c);
         self.forced.push(None);
+        self.nudged.push(false);
         self.choices.clear();
     }
 
@@ -128,13 +138,19 @@ impl<'k> InputSession<'k> {
 
     pub fn backspace(&mut self) -> Option<char> {
         self.choices.clear();
+        // Backspace backs out of a boundary adjustment: the boundary returns
+        // to the engine's own and nothing is learned.
+        self.discard_nudges();
         self.forced.pop();
+        self.nudged.pop();
         self.buffer.pop()
     }
 
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.forced.clear();
+        self.nudged.clear();
+        self.nudge_pending = false;
         self.choices.clear();
     }
 
@@ -435,7 +451,10 @@ impl<'k> InputSession<'k> {
         let predicted = self.lattice(false).analyze();
         for k in start..end.min(self.forced.len()) {
             self.forced[k] = Some(lang);
+            // This word is learned right now; it is not a pending nudge too.
+            self.nudged[k] = false;
         }
+        self.nudge_pending = self.nudged.iter().any(|&n| n);
         self.feedback(&raw, lang);
         if self.learning_paused {
             return raw;
@@ -444,6 +463,87 @@ impl<'k> InputSession<'k> {
             self.learner.update(&mut self.weights, &predicted.features, &gold.features);
         }
         raw
+    }
+
+    /// Move a language boundary for this composition without learning (what
+    /// Shift+Left/Right do, one keystroke per press).  Learning from a
+    /// half-finished adjustment teaches fragments ("e", "ex", "exc", …) and
+    /// pushes the weights once per key press, so the learning is deferred to
+    /// `settle_nudges`: once, on the final range.
+    pub fn nudge_language(&mut self, start: usize, end: usize, lang: Lang) {
+        debug_assert_eq!(self.forced.len(), self.nudged.len());
+        // A panic here would abort the host process (extern "C"), so the bound
+        // does not rely on the three vectors staying the same length.
+        for k in start..end.min(self.forced.len()).min(self.nudged.len()) {
+            self.forced[k] = Some(lang);
+            // In secret mode the boundary still moves, but nothing is marked
+            // for learning, so it can never leak into a later settle.
+            self.nudged[k] = !self.learning_paused;
+        }
+        self.nudge_pending = self.nudged.iter().any(|&n| n);
+        self.choices.clear();
+    }
+
+    /// Learn the boundary adjustments made since the last settle, once.
+    ///
+    /// * Memory: the words the adjustment ended on (a whole piece whose
+    ///   language is the one the user asked for), never the fragments passed
+    ///   on the way, and nothing for a keystroke that could not change language.
+    /// * Weights: one perceptron step from the free prediction to the path
+    ///   that carries only the nudged keystrokes' labels, so another forced
+    ///   word (F6/F10, already learned) or a private one is not counted again.
+    ///
+    /// In secret mode nothing is learned and the pending adjustment is dropped.
+    fn settle_nudges(&mut self) {
+        if !self.nudge_pending {
+            return;
+        }
+        self.nudge_pending = false;
+        if self.learning_paused {
+            self.discard_nudges();
+            return;
+        }
+        let predicted = self.lattice(false).analyze();
+        let labels: Vec<Option<Lang>> =
+            self.forced.iter().zip(&self.nudged).map(|(lang, &nudged)| if nudged { *lang } else { None }).collect();
+        // No path carries these labels (the display did not change): there is
+        // nothing to learn, so remember nothing either.
+        if self.lattice(false).analyze_with_labels(&labels).is_none() {
+            self.nudged.iter_mut().for_each(|n| *n = false);
+            return;
+        }
+        let mut remembered: Vec<(usize, usize)> = Vec::new();
+        for piece in self.compose(true) {
+            let moved = (piece.start..piece.end).any(|k| self.nudged.get(k) == Some(&true) && labels[k] == Some(piece.lang));
+            if moved && piece.lang != Lang::Neutral && !remembered.contains(&(piece.start, piece.end)) {
+                remembered.push((piece.start, piece.end));
+                let raw: String = self.buffer[piece.start..piece.end].iter().collect();
+                self.feedback(&raw, piece.lang);
+            }
+        }
+        self.nudged.iter_mut().for_each(|n| *n = false);
+        if let Some(gold) = self.lattice(false).analyze_with_labels(&labels) {
+            self.learner.update(&mut self.weights, &predicted.features, &gold.features);
+        }
+    }
+
+    /// Back out of the pending boundary adjustment: the boundary returns to
+    /// the engine's own and nothing is learned.
+    fn discard_nudges(&mut self) {
+        for k in 0..self.nudged.len().min(self.forced.len()) {
+            if self.nudged[k] {
+                self.forced[k] = None;
+                self.nudged[k] = false;
+            }
+        }
+        self.nudge_pending = false;
+    }
+
+    /// Drop everything learned-but-not-yet-applied (a boundary adjustment in
+    /// progress).  The host calls this when it erases the learned data, so
+    /// that an operation begun before the erase does not repopulate it.
+    pub fn discard_pending_learning(&mut self) {
+        self.discard_nudges();
     }
 
     /// Flip the language of the last decided token (a whole Japanese run or
@@ -495,10 +595,12 @@ impl<'k> InputSession<'k> {
     // ---- commit ---------------------------------------------------------
 
     /// Return the composed pieces, clear the buffer and carry the grammar
-    /// state over.  If the user forced any language in this composition the
-    /// forced path is the gold path and the weights have already moved; an
-    /// accepted composition teaches nothing new.
+    /// state over.  A language the user forced with `force_language` (F6/F10)
+    /// has already been learned; a boundary adjusted with `nudge_language`
+    /// (Shift+arrow) is learned here, once.  An accepted composition teaches
+    /// nothing else.
     pub fn commit(&mut self) -> Vec<Piece> {
+        self.settle_nudges();
         let a = self.analyze_final();
         let pieces = self.compose_from(&a);
         if !self.buffer.is_empty() {
@@ -506,6 +608,7 @@ impl<'k> InputSession<'k> {
         }
         self.buffer.clear();
         self.forced.clear();
+        self.nudged.clear();
         self.choices.clear();
         self.after_lang = None;
         pieces

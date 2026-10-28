@@ -269,6 +269,21 @@ pub unsafe extern "C" fn ksw_force_language(e: *mut KswEngine, start: c_int, end
     e.session.force_language(start as usize, end as usize, l);
 }
 
+/// Move a language boundary for this composition WITHOUT learning (one
+/// keystroke per Shift+arrow press).  The adjustment is learned once, when
+/// the composition is committed or typing continues; backspace and clear
+/// discard it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ksw_nudge_language(e: *mut KswEngine, start: c_int, end: c_int, lang: c_int) {
+    let e = unsafe { &mut *e };
+    let n = e.session.buffer().len() as c_int;
+    if start < 0 || end > n || start >= end {
+        return;
+    }
+    let l = if lang == 1 { Lang::En } else { Lang::Ja };
+    e.session.nudge_language(start as usize, end as usize, l);
+}
+
 /// One explanation line per decided token of the last `ksw_compose`,
 /// joined with newlines.
 #[unsafe(no_mangle)]
@@ -302,6 +317,8 @@ pub unsafe extern "C" fn ksw_reset_learning(e: *mut KswEngine) {
     *e.session.weights_mut() = Default::default();
     e.session.load_corrections(&correction_file::MemoryStore(std::cell::RefCell::new(Vec::new())));
     e.session.clear_corrections();
+    // An adjustment begun before the erase must not repopulate the profile.
+    e.session.discard_pending_learning();
 }
 
 #[unsafe(no_mangle)]
