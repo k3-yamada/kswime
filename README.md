@@ -37,7 +37,7 @@ cargo build --release                                          # モデルを埋
 cargo test --release
 ```
 
-配布物には生成済みの `data/model.bin` を同梱しています。生データを取り直さなくても `cargo build --release` だけで動きます。
+`data/model.bin` はリポジトリに含まれません（`.gitignore` の対象です）。最初に上の 1・2 行目でモデルを生成してください。生成せずに `cargo build --release` だけすると、`build.rs` が空の仮ファイルを置くため、辞書のない実行ファイルになります。
 
 macOS の IME として使う場合は `macos/build.sh --install` です（[macos/README.md](macos/README.md)）。
 
