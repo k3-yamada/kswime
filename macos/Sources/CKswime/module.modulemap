@@ -1,0 +1,5 @@
+module CKswime {
+    header "kswime.h"
+    link "kswime"
+    export *
+}

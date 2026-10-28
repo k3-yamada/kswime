@@ -1,0 +1,117 @@
+日本語	ashitanokaigihagogo2jikaradesu	あしたのかいぎはごご2じからです	
+日本語	shiryouwookutteokimasu	しりょうをおくっておきます	
+日本語	toyamakennisundeimasu	とやまけんにすんでいます	
+日本語	mitsumorishowotsukuttekudasai	みつもりしょをつくってください	
+日本語	kinouhaarigatougozaimashita	きのうはありがとうございました	
+日本語	sorehachottomuzukashiidesu	それはちょっとむずかしいです	
+日本語	nihongonyuuryokunojidouhantei	にほんごにゅうりょくのじどうはんてい	
+日本語	kanjinihenkansuru	かんじにへんかんする	
+日本語	gakkouniikimashita	がっこうにいきました	
+日本語	ra-menwotabeni ikou	らーめんをたべにいこう	
+日本語	sakewonondeneta	さけをのんでねた	
+日本語	manngawoyomu	まんがをよむ	
+日本語	sushitokaraokegasuki	すしとからおけがすき	
+日本語	tanakasanhakaishaniinakatta	たなかさんはかいしゃにいなかった	
+日本語	naninomondaimonai	なにのもんだいもない	
+日本語	kokonihanannimonai	ここにはなんにもない	
+日本語	sonnnakotohashiranai	そんなことはしらない	
+日本語	hontouniarigatou	ほんとうにありがとう	
+日本語	doushitemoyoyakugatorenai	どうしてもよやくがとれない	
+日本語	mainichiwarukinguwoshiteimasu	まいにちわるきんぐをしています	
+日本語	pasokonnnodengenwokiru	ぱそこんのでんげんをきる	
+日本語	kyoujuunioshietekudasai	きょうじゅうにおしえてください	
+日本語	kono apuri ha benri desu	このあぷりはべんりです	
+日本語	kore wo tsukatte kudasai	これをつかってください	
+英語	I love sushi	I love sushi	
+英語	thank you very much	thank you very much	
+英語	please check the attached file	please check the attached file	
+英語	let me know if you have any questions	let me know if you have any questions	
+英語	the quick brown fox jumps over the lazy dog	the quick brown fox jumps over the lazy dog	
+英語	what time is the meeting	what time is the meeting	
+英語	I will be there at noon	I will be there at noon	
+英語	sorry for the late reply	sorry for the late reply	
+英語	it works on my machine	it works on my machine	
+英語	have a nice day	have a nice day	
+英語	I want to go home	I want to go home	
+英語	can you review my pull request	can you review my pull request	
+英語	no problem at all	no problem at all	
+英語	just do it	just do it	
+英語	deadline is next friday	deadline is next friday	
+英語	great job everyone	great job everyone	
+混在	slackdehenshinshimasu	slackでへんしんします	
+混在	zoomnoliknwookutte	zoomのliknをおくって	
+混在	excelnomakurogaugokanai	excelのまくろがうごかない	
+混在	pythondekaitasukuriputo	pythonでかいたすくりぷと	
+混在	dockerwoinstallshita	dockerをinstallした	
+混在	apikeywosettei	apikeyをせってい	
+混在	claudecodedekaihatsu	claudecodeでかいはつ	
+混在	cursordecommitsuru	cursorでcommitする	
+混在	firebasenoauthwotsukau	firebaseのauthをつかう	
+混在	flutterdeapuriwotsukuru	flutterであぷりをつくる	
+混在	typescriptnikakikaeta	typescriptにかきかえた	
+混在	rustnolifetimegamuzukashii	rustのlifetimeがむずかしい	
+混在	cloudflareworkersnidepuroi	cloudflareworkersにでぷろい	
+混在	gmailwokakuninshite	gmailをかくにんして	
+混在	notionnimemowokaita	notionにめもをかいた	
+混在	iphonenobatteri-gakireta	iphoneのばってりーがきれた	
+混在	macbooknofandegaurusai	macbookのfanでがうるさい	
+混在	teamsdekaigi	teamsでかいぎ	
+混在	chatgptyoriclaudegaii	chatgptよりclaudeがいい	
+混在	errorlogwomite	errorlogをみて	
+混在	bugfixnopullrequest	bugfixのpullrequest	
+混在	mergeshitekudasai	mergeしてください	
+混在	buildgakowareta	buildがこわれた	
+混在	testwokaiteimasu	testをかいています	
+混在	deployshimashita	deployしました	
+混在	reviewonegaishimasu	reviewおねがいします	
+混在	npmnopackagewokoushin	npmのpackageをこうしん	
+混在	vscodenoextensionwoireta	vscodeのextensionをいれた	
+混在	amazondekatta	amazonでかった	
+混在	youtubedemita	youtubeでみた	
+混在	netflixnodoramawomiru	netflixのどらまをみる	
+混在	wifiganai	wifiがない	
+混在	bluetoothgatsunagaranai	bluetoothがつながらない	
+混在	Tokyonikita	Tokyoにきた	
+混在	AWSnokosutogatakai	AWSのこすとがたかい	
+混在	PDFdeokutte	PDFでおくって	
+混在	DXnosoudan	DXのそうだん	
+混在	ITdounyuushien	ITどうにゅうしえん	
+曖昧	name	name	what is your 
+曖昧	kite	きて	はやく
+曖昧	site	site	visit our 
+曖昧	sou	そう	それは
+曖昧	so	so	I think 
+識別子	taro@example.com	taro@example.com	
+識別子	https://example.com/path	https://example.com/path	
+識別子	user_name	user_name	
+識別子	foo/bar/baz	foo/bar/baz	
+識別子	C:\Users\taro	C:\Users\taro	
+識別子	k8s	k8s	
+識別子	v2.0	v2.0	
+記号	[kakko]	「かっこ」	
+記号	10ji30pun	10じ30ぷん	
+記号	2026nen10gatsu	2026ねん10がつ	
+記号	yes!	yes!	
+記号	hai!	はい！	
+記号	sou?	そう？	
+大文字	Toyama	Toyama	
+大文字	AZALLY	AZALLY	
+大文字	TONIOnoshigoto	TONIOのしごと	
+大文字	I am	I am	
+大文字	OKdesu	OKです	
+大文字	NGdesu	NGです	
+日本語	asagohanwotabetekaradekakeru	あさごはんをたべてからでかける	
+日本語	raishuunokaigihaenkininarimashita	らいしゅうのかいぎはえんきになりました	
+英語	talk to you later	talk to you later	
+英語	what do you think about it	what do you think about it	
+混在	kyouhaslackdesoudanshita	きょうはslackでそうだんした	
+混在	gitlabnimergeshita	gitlabにmergeした	
+曖昧	kite	kite	I bought a 
+曖昧	name	なめ	ほんの
+曖昧	same	same	it is the 
+曖昧	same	さめ	うみの
+曖昧	me	me	trust 
+曖昧	ga	が	これ
+曖昧	de	で	でんしゃ
+曖昧	at	at	meet me 
+記号	hai,sou.	はい、そう。	

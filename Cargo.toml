@@ -1,0 +1,26 @@
+[package]
+name = "kswime"
+version = "0.1.0"
+edition = "2024"
+description = "Dependency-free Japanese/English auto-switching romaji input engine"
+license = "MIT"
+
+[dependencies]
+
+[lib]
+name = "kswime"
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "kswime"
+path = "src/main.rs"
+
+[[bin]]
+name = "kswime-build-model"
+path = "src/bin/build_model.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

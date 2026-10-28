@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: engine (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Public source data (Mozc pinned by commit, gwordlist, SCOWL, CMUdict).
+      # Cached on the fetch script's hash so the model is rebuilt only when
+      # the sources or the builder change.
+      - name: Cache source data
+        id: raw
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/raw/mozc_dict*.txt
+            data/raw/connection_single_column.txt
+            data/raw/en_gbooks.tsv
+            data/raw/cmudict.dict
+          key: raw-${{ hashFiles('tools/fetch_data.sh') }}
+      - name: Fetch source data
+        if: steps.raw.outputs.cache-hit != 'true'
+        run: tools/fetch_data.sh
+
+      - name: Build model
+        run: cargo run --release --bin kswime-build-model -- data/raw data/model.bin
+      - name: Build
+        run: cargo build --release
+      - name: Test
+        run: cargo test --release
+      - name: Evaluate
+        run: |
+          for f in cases mixed_bench ja_bench convert; do
+            echo "== $f"; target/release/kswime eval tests/data/$f.tsv | tail -1
+          done
+      - name: Dependency direction (Clean Architecture)
+        run: |
+          ! grep -rn "crate::infrastructure\|crate::presentation" src/domain src/application
+      - name: C ABI smoke test
+        run: |
+          cc -O2 -o /tmp/smoke tests/c/smoke.c -Iinclude target/release/libkswime.a -lpthread -ldl -lm
+          /tmp/smoke
+      # Resource budget (開発計画 9 節): load ≤ 300 ms, RSS ≤ 120 MB, p99 ≤ 5 ms.
+      - name: Resource budget
+        run: target/release/kswime bench tests/data/cases.tsv --budget
+      - name: Model size
+        run: ls -la data/model.bin target/release/kswime
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model.bin
+          path: data/model.bin
+          retention-days: 7
+
+  macos:
+    name: Kswime.app (macOS, compile only)
+    runs-on: macos-14
+    needs: engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: model.bin
+          path: data
+      - name: Build Kswime.app
+        run: macos/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kswime.app
+          path: macos/build/Kswime.app
+          retention-days: 7

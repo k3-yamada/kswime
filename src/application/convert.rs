@@ -1,0 +1,187 @@
+//! Use case: convert a Japanese kana run to kanji.
+//!
+//! A plain word lattice over the kana string with Mozc's class-conditional
+//! word costs and POS bigram, decoded with an N-best Viterbi so the user can
+//! cycle through alternatives.  Unknown kana are passed through as single
+//! characters at a high cost.
+
+use crate::domain::transliterate::loose_key;
+use crate::domain::{Candidate, Knowledge};
+
+
+/// A hypothesis stored on a lattice node: total cost and back-pointer
+/// (previous node index, previous hypothesis rank, entry index or None for
+/// a pass-through char).
+#[derive(Clone, Copy)]
+struct Hyp<'s> {
+    cost: i64,
+    rid: u16,
+    prev_node: usize,
+    prev_rank: usize,
+    surface: Option<&'s str>,
+    /// kana span length
+    span: usize,
+}
+
+const UNKNOWN_CHAR_COST: i64 = 9000;
+/// Extra cost of rendering a katakana reading as its English spelling
+/// (so カタカナ stays the default and the English form is a candidate).
+const LOAN_ENGLISH_COST: i64 = 2500;
+/// Longest kana span looked up in the loanword bridge.
+const LOAN_MAX_KANA: usize = 12;
+
+/// Convert `kana` to its N best surface strings.  `left_rid` is the POS of
+/// the word before the run (BOS if none); `eos` adds the sentence-end
+/// transition when the run ends the input.
+pub fn convert(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: bool, n_best: usize, use_boundary: bool) -> Vec<Candidate> {
+    let mut out = decode(kb, kana, left_rid, eos, n_best, use_boundary, LOAN_ENGLISH_COST);
+    if kana.is_empty() {
+        return out;
+    }
+    // plain hiragana and katakana are always offered, then the English
+    // rendering: the best path when loanword arcs are favoured (こみっとする →
+    // commitする), plus the conventional katakana of a whole-run loanword
+    let hira: String = kana.iter().collect();
+    let kata: String = kana.iter().map(|c| to_katakana(*c)).collect();
+    let mut extras = vec![hira.clone(), kata];
+    if n_best > 1 {
+        for c in decode(kb, kana, left_rid, eos, 2, use_boundary, -2500).into_iter().take(2) {
+            if c.surface.bytes().any(|b| b.is_ascii_alphabetic()) {
+                extras.push(c.surface);
+            }
+        }
+        if kana.len() <= LOAN_MAX_KANA {
+            for w in kb.english_for_kana(&loose_key(&hira)).iter().take(1) {
+                if let Some(k) = kb.katakana_for_english(w).first() {
+                    extras.push(k.to_string());
+                }
+            }
+        }
+    }
+    for extra in extras {
+        if !out.iter().any(|c| c.surface == extra) {
+            out.push(Candidate { surface: extra, cost: i64::MAX / 2 });
+        }
+    }
+    out
+}
+
+/// N-best Viterbi over the kana string.  `loan_bias` is added to the cost of
+/// loanword arcs (English spelling for a katakana reading).
+fn decode(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: bool, n_best: usize, use_boundary: bool, loan_bias: i64) -> Vec<Candidate> {
+    let n = kana.len();
+    if n == 0 {
+        return vec![Candidate { surface: String::new(), cost: 0 }];
+    }
+    let k = n_best.max(1);
+    let pos_ids = kb.pos();
+    // nodes[pos] = hypotheses ending at pos (sorted by cost, ≤ k per distinct rid… we keep k overall)
+    let mut nodes: Vec<Vec<Hyp<'_>>> = vec![Vec::new(); n + 1];
+    nodes[0].push(Hyp { cost: 0, rid: left_rid, prev_node: 0, prev_rank: 0, surface: None, span: 0 });
+    for pos in 0..n {
+        if nodes[pos].is_empty() {
+            continue;
+        }
+        let mut arcs: Vec<(usize, Option<&str>, u16, u16, i64)> = Vec::new(); // (len, surface, lid, rid, cost)
+        for (len, e) in kb.prefixes(&kana[pos..], kb.max_reading_len()) {
+            arcs.push((len, Some(e.surface), e.lid, e.rid, e.cost as i64));
+        }
+        // katakana reading of an English word → the English spelling itself
+        // (こみっと → commit), as a noun; the kana→kanji N-best then offers it
+        for len in 2..=kana.len().saturating_sub(pos).min(LOAN_MAX_KANA) {
+            // only where the reading has no native (non-katakana) word: する,
+            // した stay Japanese; さーばー, こみっと may become English
+            if kb.lookup(&kana[pos..pos + len]).iter().any(|e| !e.kata_only) {
+                continue;
+            }
+            let span: String = kana[pos..pos + len].iter().collect();
+            let key = loose_key(&span);
+            for (rank, w) in kb.english_for_kana(&key).iter().take(3).enumerate() {
+                let ecost = kb.word(w).map(|e| e.cost as i64).unwrap_or(8000);
+                arcs.push((len, Some(*w), pos_ids.noun_sahen, pos_ids.noun_sahen, ecost + loan_bias + rank as i64 * 500));
+            }
+        }
+        // pass-through single kana (unknown)
+        arcs.push((1, None, pos_ids.noun_general, pos_ids.noun_general, UNKNOWN_CHAR_COST));
+        let prevs: Vec<(usize, Hyp)> = nodes[pos].iter().copied().enumerate().collect();
+        for (len, surface, lid, rid, wcost) in arcs {
+            let end = pos + len;
+            for &(rank, h) in &prevs {
+                let mut total = h.cost + wcost + kb.connection(h.rid, lid) as i64;
+                if use_boundary {
+                    // sentence start is always a bunsetsu start; after a
+                    // non-Japanese token (English, number) only when the
+                    // grammar says so (a particle continues the bunsetsu)
+                    if pos == 0 {
+                        if h.rid == pos_ids.bos || kb.is_boundary(h.rid, lid) {
+                            total += kb.prefix_penalty(lid) as i64;
+                        }
+                    } else if kb.is_boundary(h.rid, lid) {
+                        total += (kb.suffix_penalty(h.rid) + kb.prefix_penalty(lid)) as i64;
+                    }
+                }
+                let hyp = Hyp { cost: total, rid, prev_node: pos, prev_rank: rank, surface, span: len };
+                insert_hyp(&mut nodes[end], hyp, k);
+            }
+        }
+    }
+    // final ranking with optional EOS transition
+    let mut finals: Vec<(i64, usize)> = nodes[n]
+        .iter()
+        .enumerate()
+        .map(|(r, h)| {
+            let mut c = h.cost;
+            if eos {
+                c += kb.connection(h.rid, pos_ids.bos) as i64;
+                if use_boundary {
+                    c += kb.suffix_penalty(h.rid) as i64;
+                }
+            }
+            (c, r)
+        })
+        .collect();
+    finals.sort();
+    let mut out: Vec<Candidate> = Vec::new();
+    for (cost, rank) in finals {
+        let mut parts: Vec<String> = Vec::new();
+        let mut node = n;
+        let mut r = rank;
+        while node > 0 {
+            let h = nodes[node][r];
+            match h.surface {
+                Some(sf) => parts.push(sf.to_string()),
+                None => parts.push(kana[node - h.span..node].iter().collect()),
+            }
+            node = h.prev_node;
+            r = h.prev_rank;
+        }
+        parts.reverse();
+        let surface = parts.concat();
+        if !out.iter().any(|c| c.surface == surface) {
+            out.push(Candidate { surface, cost });
+        }
+        if out.len() >= k {
+            break;
+        }
+    }
+    out
+}
+
+fn insert_hyp<'s>(list: &mut Vec<Hyp<'s>>, h: Hyp<'s>, k: usize) {
+    // keep list sorted by cost, at most k entries
+    let pos = list.partition_point(|x| x.cost <= h.cost);
+    if pos >= k {
+        return;
+    }
+    list.insert(pos, h);
+    if list.len() > k {
+        list.truncate(k);
+    }
+}
+
+pub fn to_katakana(c: char) -> char {
+    match c {
+        'ぁ'..='ゖ' => char::from_u32(c as u32 + 0x60).unwrap_or(c),
+        _ => c,
+    }
+}

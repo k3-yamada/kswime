@@ -1,0 +1,10 @@
+target/
+macos/.build/
+data/raw/mozc_dict*.txt
+data/raw/connection_single_column.txt
+data/raw/en_gbooks.tsv
+data/raw/cmudict.dict
+macos/build/
+.omc/
+data/model.bin
+.serena/

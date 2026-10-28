@@ -1,0 +1,42 @@
+# Supplementary English vocabulary for kswime (original list, MIT).
+# Hand-written: technical / product terms, colloquial words, contractions and
+# place names that a book corpus (Google Books Ngram) under-represents.
+# One word per line or several per line; "#" starts a comment.
+# kswime-build-model gives each word a fixed cost (6500) unless the
+# frequency table already has it, in which case the word is only flagged as
+# supplementary.
+github gitlab bitbucket git commit push pull merge rebase branch clone fork repo repository
+google chrome gmail youtube android apple ios iphone ipad macos mac macbook windows linux ubuntu debian
+microsoft azure aws amazon cloudflare vercel netlify heroku docker kubernetes k8s terraform ansible
+python javascript typescript rust golang java kotlin swift ruby php perl scala haskell elixir dart flutter
+react vue angular svelte nextjs nuxt node npm yarn pnpm bun deno vite webpack babel eslint prettier
+html css sass tailwind bootstrap json yaml toml xml csv markdown
+api sdk cli gui ui ux url uri http https ssl tls ssh ftp dns ip tcp udp vpn cdn oauth jwt
+sql mysql postgres postgresql sqlite mongodb redis firebase supabase graphql grpc rest
+slack discord zoom teams notion trello jira confluence figma canva miro
+chatgpt claude gemini copilot openai anthropic llm ai ml gpu cpu ram ssd hdd usb hdmi wifi bluetooth
+twitter facebook instagram tiktok linkedin reddit netflix spotify
+email mail inbox online offline login logout signup password username account admin user users
+app apps web website site blog wiki forum podcast webinar
+update upgrade install uninstall deploy release build debug test tests testing refactor
+bug bugs issue issues error errors warning warnings crash log logs stacktrace
+server client backend frontend fullstack database cache queue proxy router gateway
+file files folder directory path config settings option options
+button click tap scroll swipe menu tab tabs window modal popup toast
+plugin plugins extension addon widget theme template layout
+async sync await promise callback thread process daemon cron
+vote invite share like follow unfollow subscribe post reply comment
+dev prod staging localhost sandbox pipeline workflow ci cd devops
+pdf png jpg jpeg gif svg mp3 mp4 zip tar
+tmux vim emacs vscode cursor terminal shell bash zsh powershell
+excel word powerpoint outlook onedrive sharepoint dropbox
+wikipedia pedia stackoverflow qiita zenn
+auth oauth2 webhook endpoint token tokens
+# colloquial / interjections absent from a book corpus
+ok okay hey yeah yep nope hi hello wow oops yes no thanks please sorry bye gonna wanna gotta kinda lol omg btw asap fyi
+# contractions (apostrophe is a legal English-arc character)
+don't can't won't isn't aren't wasn't weren't didn't doesn't haven't hasn't hadn't couldn't wouldn't shouldn't
+i'm i'll i've i'd you're you'll you've you'd we're we'll we've we'd they're they'll they've they'd
+he's he'll he'd she's she'll she'd it's it'll that's there's here's what's who's let's
+# places and names likely to be typed in Latin letters
+japan tokyo osaka kyoto toyama kanazawa hokuriku nagoya fukuoka sapporo yokohama
