@@ -30,6 +30,15 @@ final class KswimeInputController: IMKInputController {
     /// Index into `lastPieces` of the focused piece while editing.
     private var focus: Int?
     private var lastPieces: [Piece] = []
+    /// Which bunsetsu of the focused Japanese piece has the focus (0 for a
+    /// piece with one bunsetsu).  Clamped on use: a re-render can change how
+    /// many bunsetsu a piece has.
+    private var segFocus = 0
+
+    /// The focused bunsetsu of `piece`, kept inside its range.
+    private func currentSeg(_ piece: Int) -> Int {
+        min(segFocus, max(0, lastPieces[piece].segments.count - 1))
+    }
 
     /// Pieces the focus can land on (words, not punctuation or spaces).
     private func focusable(_ i: Int) -> Bool { lastPieces[i].lang != .neutral }
@@ -51,15 +60,28 @@ final class KswimeInputController: IMKInputController {
             candidateMode = true
             render(client)   // final judgement; piece indexes may change
             focus = focusedIndex
+            // the default is the last word, and in it the last bunsetsu
+            segFocus = focus.map { max(0, lastPieces[$0].segments.count - 1) } ?? 0
         }
     }
 
     private func moveFocus(_ step: Int, _ client: IMKTextInput) {
         beginEditing(client)
         guard var i = focusedIndex else { return }
+        // inside a piece with several bunsetsu, the arrow walks them first
+        let next = currentSeg(i) + step
+        if next >= 0 && next < lastPieces[i].segments.count {
+            segFocus = next
+            render(client)
+            return
+        }
         var j = i + step
         while j >= 0 && j < lastPieces.count {
-            if focusable(j) { i = j; break }
+            if focusable(j) {
+                i = j
+                segFocus = step > 0 ? 0 : max(0, lastPieces[j].segments.count - 1)
+                break
+            }
             j += step
         }
         focus = i
@@ -83,6 +105,12 @@ final class KswimeInputController: IMKInputController {
         beginEditing(client)
         guard let i = focusedIndex else { return }
         let p = lastPieces[i]
+        // the right end of a bunsetsu that is not the piece's last is a
+        // bunsetsu boundary, not a language boundary
+        if p.lang == .japanese, currentSeg(i) < p.segments.count - 1 {
+            moveBunsetsu(forward: delta > 0, client)
+            return
+        }
         let total = engine.bufferLength
         if delta > 0 {
             guard p.end < total else { return }
@@ -95,6 +123,23 @@ final class KswimeInputController: IMKInputController {
         }
         render(client)
         focus = lastPieces.firstIndex(where: { $0.start <= p.start && p.start < $0.end && $0.lang != .neutral }) ?? focusedIndex
+        render(client)
+    }
+
+    /// Move the right end of the focused bunsetsu by one kana: the bunsetsu
+    /// boundary there moves, or, on the last bunsetsu, a boundary appears one
+    /// kana before the piece's end.  The converter re-converts around it.
+    /// (Option+Shift+Left/Right; Shift+Left/Right do this too, except on the
+    /// last bunsetsu, where they move the language boundary.)
+    private func moveBunsetsu(forward: Bool, _ client: IMKTextInput) {
+        beginEditing(client)
+        guard let i = focusedIndex, lastPieces[i].lang == .japanese else { return }
+        let segs = lastPieces[i].segments
+        guard !segs.isEmpty, let moved = engine.stepCut(at: segs[currentSeg(i)].keyEnd, forward: forward) else { return }
+        render(client)
+        if let i2 = focusedIndex, let k = lastPieces[i2].segments.firstIndex(where: { $0.keyEnd == moved }) {
+            segFocus = k
+        }
         render(client)
     }
 
@@ -295,19 +340,33 @@ final class KswimeInputController: IMKInputController {
             cycleCandidate(-1, client)
             return true
         case kVK_LeftArrow where !engine.isEmpty:
-            if flags.contains(.shift) { moveBoundary(-1, client) } else { moveFocus(-1, client) }
+            if flags.contains(.shift) && flags.contains(.option) {
+                moveBunsetsu(forward: false, client)
+            } else if flags.contains(.shift) {
+                moveBoundary(-1, client)
+            } else {
+                moveFocus(-1, client)
+            }
             return true
         case kVK_RightArrow where !engine.isEmpty:
-            if flags.contains(.shift) { moveBoundary(1, client) } else { moveFocus(1, client) }
+            if flags.contains(.shift) && flags.contains(.option) {
+                moveBunsetsu(forward: true, client)
+            } else if flags.contains(.shift) {
+                moveBoundary(1, client)
+            } else {
+                moveFocus(1, client)
+            }
             return true
         case kVK_Home where !engine.isEmpty:
             beginEditing(client)
             focus = lastPieces.firstIndex(where: { $0.lang != .neutral })
+            segFocus = 0
             render(client)
             return true
         case kVK_End where !engine.isEmpty:
             beginEditing(client)
             focus = lastPieces.lastIndex(where: { $0.lang != .neutral })
+            segFocus = focus.map { max(0, lastPieces[$0].segments.count - 1) } ?? 0
             render(client)
             return true
         case kVK_F6:
@@ -393,27 +452,34 @@ final class KswimeInputController: IMKInputController {
             // undecided = raw (dotted) so the eye lands on what may be wrong;
             // the focused piece is drawn as the selected segment
             let style: Int
-            if i == focused {
-                style = kTSMHiliteSelectedConvertedText
-            } else {
-                switch p.lang {
-                case .japanese, .english: style = p.confidence == 0 ? kTSMHiliteConvertedText : kTSMHiliteRawText
-                case .neutral: style = p.pending ? kTSMHiliteRawText : kTSMHiliteConvertedText
-                }
+            switch p.lang {
+            case .japanese, .english: style = p.confidence == 0 ? kTSMHiliteConvertedText : kTSMHiliteRawText
+            case .neutral: style = p.pending ? kTSMHiliteRawText : kTSMHiliteConvertedText
             }
             var attrs = mark(forStyle: style, at: NSRange(location: text.length, length: p.text.utf16.count)) as? [NSAttributedString.Key: Any] ?? [:]
             if p.confidence == 2 { attrs[.foregroundColor] = NSColor.secondaryLabelColor }
+            let pieceStart = text.length
+            text.append(NSAttributedString(string: p.text, attributes: attrs))
             if i == focused {
+                // Only the focused part is drawn selected: the whole piece, or,
+                // in a piece of several bunsetsu, the focused bunsetsu.
+                var range = NSRange(location: pieceStart, length: p.text.utf16.count)
+                if p.segments.count > 1 {
+                    let k = currentSeg(i)
+                    let from = k == 0 ? 0 : p.segments[k - 1].utf16End
+                    range = NSRange(location: pieceStart + from, length: p.segments[k].utf16End - from)
+                }
                 // Hosts draw the selected range (not the attributes) as the
                 // highlighted segment, so the selection follows the focus.
-                focusedRange = NSRange(location: text.length, length: p.text.utf16.count)
+                focusedRange = range
                 // kTSMHiliteSelectedConvertedText alone is hard to tell from the
                 // other underlines in many hosts, so say it explicitly.
-                attrs[.underlineStyle] = NSUnderlineStyle.thick.rawValue
-                attrs[.underlineColor] = NSColor.controlAccentColor
-                attrs[.markedClauseSegment] = i
+                var selected = mark(forStyle: kTSMHiliteSelectedConvertedText, at: range) as? [NSAttributedString.Key: Any] ?? [:]
+                selected[.underlineStyle] = NSUnderlineStyle.thick.rawValue
+                selected[.underlineColor] = NSColor.controlAccentColor
+                selected[.markedClauseSegment] = i
+                text.addAttributes(selected, range: range)
             }
-            text.append(NSAttributedString(string: p.text, attributes: attrs))
         }
         client.setMarkedText(text, selectionRange: focusedRange ?? NSRange(location: text.length, length: 0), replacementRange: notFound)
 
@@ -426,6 +492,13 @@ final class KswimeInputController: IMKInputController {
                 if let n = words.firstIndex(of: idx) {
                     let p = pieces[idx]
                     title = "\(n + 1)/\(words.count)  \(p.lang == .japanese ? p.kana : p.text)"
+                    if p.segments.count > 1 {
+                        // name the bunsetsu too: some hosts draw no highlight
+                        let k = currentSeg(idx)
+                        let from = k == 0 ? 0 : p.segments[k - 1].utf16End
+                        let part = (p.text as NSString).substring(with: NSRange(location: from, length: p.segments[k].utf16End - from))
+                        title = "\(n + 1)/\(words.count)  文節 \(k + 1)/\(p.segments.count)  \(part)"
+                    }
                 }
             }
             panel.show(candidates: pieces[idx].candidates, selected: pieces[idx].selected, caret: rect,

@@ -6,7 +6,7 @@ pub mod ports;
 pub mod romaji;
 pub mod transliterate;
 
-pub use composition::{Analysis, Candidate, Context, Lang, Piece, Segment};
+pub use composition::{Analysis, Candidate, Context, Lang, Piece, PieceSeg, SegEnd, Segment};
 pub use ports::{CorrectionStore, EnWord, EnglishLexicon, JaEntry, JapaneseLexicon, Knowledge, LoanwordBridge, PosGrammar, PosIds};
 pub use romaji::{KanaPoint, RomajiTable};
 

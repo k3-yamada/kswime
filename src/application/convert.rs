@@ -6,7 +6,7 @@
 //! characters at a high cost.
 
 use crate::domain::transliterate::loose_key;
-use crate::domain::{Candidate, Knowledge};
+use crate::domain::{Candidate, Knowledge, SegEnd};
 
 
 /// A hypothesis stored on a lattice node: total cost and back-pointer
@@ -21,6 +21,9 @@ struct Hyp<'s> {
     surface: Option<&'s str>,
     /// kana span length
     span: usize,
+    /// this word opens a bunsetsu (sentence start, a grammar boundary, or a
+    /// forced cut)
+    starts_seg: bool,
 }
 
 const UNKNOWN_CHAR_COST: i64 = 9000;
@@ -72,7 +75,9 @@ pub fn convert_with_cuts(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: 
     }
     for extra in extras {
         if !out.iter().any(|c| c.surface == extra) {
-            out.push(Candidate { surface: extra, cost: i64::MAX / 2 });
+            // plain kana and loanword spellings are one bunsetsu
+            let segs = vec![SegEnd { kana: kana.len(), chars: extra.chars().count() }];
+            out.push(Candidate { surface: extra, cost: i64::MAX / 2, segs });
         }
     }
     out
@@ -85,13 +90,13 @@ pub fn convert_with_cuts(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: 
 fn decode(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: bool, n_best: usize, use_boundary: bool, loan_bias: i64, cuts: &[usize]) -> Vec<Candidate> {
     let n = kana.len();
     if n == 0 {
-        return vec![Candidate { surface: String::new(), cost: 0 }];
+        return vec![Candidate { surface: String::new(), cost: 0, segs: Vec::new() }];
     }
     let k = n_best.max(1);
     let pos_ids = kb.pos();
     // nodes[pos] = hypotheses ending at pos (sorted by cost, ≤ k per distinct rid… we keep k overall)
     let mut nodes: Vec<Vec<Hyp<'_>>> = vec![Vec::new(); n + 1];
-    nodes[0].push(Hyp { cost: 0, rid: left_rid, prev_node: 0, prev_rank: 0, surface: None, span: 0 });
+    nodes[0].push(Hyp { cost: 0, rid: left_rid, prev_node: 0, prev_rank: 0, surface: None, span: 0, starts_seg: false });
     for pos in 0..n {
         if nodes[pos].is_empty() {
             continue;
@@ -139,7 +144,9 @@ fn decode(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: bool, n_best: u
                         total += (kb.suffix_penalty(h.rid) + kb.prefix_penalty(lid)) as i64;
                     }
                 }
-                let hyp = Hyp { cost: total, rid, prev_node: pos, prev_rank: rank, surface, span: len };
+                // without boundary modelling the whole run is one bunsetsu
+                let starts_seg = pos == 0 || (use_boundary && (forced_here || kb.is_boundary(h.rid, lid)));
+                let hyp = Hyp { cost: total, rid, prev_node: pos, prev_rank: rank, surface, span: len, starts_seg };
                 insert_hyp(&mut nodes[end], hyp, k);
             }
         }
@@ -162,22 +169,34 @@ fn decode(kb: &dyn Knowledge, kana: &[char], left_rid: u16, eos: bool, n_best: u
     finals.sort();
     let mut out: Vec<Candidate> = Vec::new();
     for (cost, rank) in finals {
-        let mut parts: Vec<String> = Vec::new();
+        // (surface, kana length, opens a bunsetsu), last word first
+        let mut words: Vec<(String, usize, bool)> = Vec::new();
         let mut node = n;
         let mut r = rank;
         while node > 0 {
             let h = nodes[node][r];
-            match h.surface {
-                Some(sf) => parts.push(sf.to_string()),
-                None => parts.push(kana[node - h.span..node].iter().collect()),
-            }
+            let sf = match h.surface {
+                Some(sf) => sf.to_string(),
+                None => kana[node - h.span..node].iter().collect(),
+            };
+            words.push((sf, h.span, h.starts_seg));
             node = h.prev_node;
             r = h.prev_rank;
         }
-        parts.reverse();
-        let surface = parts.concat();
+        words.reverse();
+        let surface: String = words.iter().map(|w| w.0.as_str()).collect();
+        // a bunsetsu ends where the next word opens one, and at the run's end
+        let mut segs: Vec<SegEnd> = Vec::new();
+        let (mut kana_end, mut chars_end) = (0, 0);
+        for (i, (sf, span, _)) in words.iter().enumerate() {
+            kana_end += span;
+            chars_end += sf.chars().count();
+            if words.get(i + 1).is_none_or(|next| next.2) {
+                segs.push(SegEnd { kana: kana_end, chars: chars_end });
+            }
+        }
         if !out.iter().any(|c| c.surface == surface) {
-            out.push(Candidate { surface, cost });
+            out.push(Candidate { surface, cost, segs });
         }
         if out.len() >= k {
             break;

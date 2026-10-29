@@ -15,5 +15,5 @@ pub mod infrastructure;
 pub mod presentation;
 
 pub use application::{Config, InputSession, Learner, Strength, Weights};
-pub use domain::{Analysis, Candidate, Context, Knowledge, Lang, Piece, Segment};
+pub use domain::{Analysis, Candidate, Context, Knowledge, Lang, Piece, PieceSeg, SegEnd, Segment};
 pub use infrastructure::{load_embedded_model, Model, MODEL_BYTES};

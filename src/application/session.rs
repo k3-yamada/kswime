@@ -6,7 +6,7 @@ use crate::application::convert;
 use crate::application::judge::Lattice;
 use crate::application::learn::Learner;
 use crate::application::weights::{feat, Config, Strength, Weights, FEATURE_DOCS, FEATURE_NAMES};
-use crate::domain::{Analysis, Context, CorrectionStore, Knowledge, Lang, Piece};
+use crate::domain::{Analysis, Context, CorrectionStore, Knowledge, Lang, Piece, PieceSeg, SegEnd};
 use std::collections::HashMap;
 
 pub struct InputSession<'k> {
@@ -29,6 +29,10 @@ pub struct InputSession<'k> {
     nudged: Vec<bool>,
     /// a boundary adjustment is waiting to be learned
     nudge_pending: bool,
+    /// bunsetsu boundaries the user forced inside a Japanese run, as keystroke
+    /// positions (sorted, unique); a cut at `p` separates keystroke `p - 1`
+    /// from `p`.  They stay valid while typing goes on.
+    cuts: Vec<usize>,
     /// learning from accepted commits (perceptron) on/off
     pub learn_on_commit: bool,
     /// secret mode: corrections still apply to the current composition but
@@ -51,6 +55,7 @@ impl<'k> InputSession<'k> {
             forced: Vec::new(),
             nudged: Vec::new(),
             nudge_pending: false,
+            cuts: Vec::new(),
             learn_on_commit: true,
             learning_paused: false,
         }
@@ -143,7 +148,101 @@ impl<'k> InputSession<'k> {
         self.discard_nudges();
         self.forced.pop();
         self.nudged.pop();
-        self.buffer.pop()
+        let c = self.buffer.pop();
+        let len = self.buffer.len();
+        self.cuts.retain(|&p| p < len);
+        c
+    }
+
+    /// Force (or remove) a bunsetsu boundary before keystroke `pos` inside a
+    /// Japanese run.  Returns false when `pos` is not strictly inside the
+    /// buffer.  A cut that does not fall on a kana boundary of a Japanese run
+    /// (inside a mora, or in English) is kept but has no effect.
+    pub fn set_cut(&mut self, pos: usize, on: bool) -> bool {
+        if pos == 0 || pos >= self.buffer.len() {
+            return false;
+        }
+        match (self.cuts.binary_search(&pos), on) {
+            (Err(i), true) => self.cuts.insert(i, pos),
+            (Ok(i), false) => {
+                self.cuts.remove(i);
+            }
+            _ => {}
+        }
+        self.choices.clear();
+        true
+    }
+
+    pub fn cuts(&self) -> &[usize] {
+        &self.cuts
+    }
+
+    /// The forced cuts that fall inside the Japanese run of keystrokes
+    /// `start..end` (whose kana is `kana`), as kana positions.  A cut counts
+    /// only where the keystrokes split into two complete kana sequences that
+    /// together give `kana`: not inside a mora, and not across English.
+    fn kana_cuts(&self, start: usize, end: usize, kana: &str) -> Vec<usize> {
+        self.kana_splits(start, end, kana)
+            .into_iter()
+            .filter(|(key, _)| self.cuts.contains(key))
+            .map(|(_, kana_pos)| kana_pos)
+            .collect()
+    }
+
+    /// Every keystroke position inside the Japanese run `start..end` (whose
+    /// kana is `kana`) where the run splits into two complete kana sequences
+    /// that together give `kana`, with the kana count to its left.  Where two
+    /// positions leave the same kana count (`nn` for ん), the later one wins,
+    /// so a boundary sits after the whole of the mora.
+    fn kana_splits(&self, start: usize, end: usize, kana: &str) -> Vec<(usize, usize)> {
+        let table = self.kb.romaji();
+        let mut splits: Vec<(usize, usize)> = Vec::new();
+        for p in start + 1..end {
+            let left: String = self.buffer[start..p].iter().collect();
+            let right: String = self.buffer[p..end].iter().collect();
+            let (Some(l), Some(r)) = (table.convert_exact(&left), table.convert_exact(&right)) else { continue };
+            if format!("{l}{r}") != kana {
+                continue;
+            }
+            let kana_pos = l.chars().count();
+            match splits.last_mut() {
+                Some(last) if last.1 == kana_pos => last.0 = p,
+                _ => splits.push((p, kana_pos)),
+            }
+        }
+        splits
+    }
+
+    /// The bunsetsu ends of a Japanese piece's selected candidate as keystroke
+    /// positions.  When a bunsetsu end falls where the keystrokes cannot be
+    /// split into kana, the whole run is reported as one bunsetsu.
+    fn piece_segs(&self, start: usize, end: usize, kana: &str, ends: &[SegEnd]) -> Vec<PieceSeg> {
+        let total = kana.chars().count();
+        let splits = self.kana_splits(start, end, kana);
+        let mut segs: Vec<PieceSeg> = Vec::new();
+        for se in ends {
+            let key_end = if se.kana >= total { Some(end) } else { splits.iter().find(|s| s.1 == se.kana).map(|s| s.0) };
+            match key_end {
+                Some(key_end) => segs.push(PieceSeg { key_end, chars: se.chars }),
+                None => return ends.last().map(|l| vec![PieceSeg { key_end: end, chars: l.chars }]).unwrap_or_default(),
+            }
+        }
+        segs
+    }
+
+    /// Move the forced boundary at keystroke `pos` of a Japanese run by one
+    /// kana, forward or back, and return its new position.  A boundary that
+    /// came from the grammar (not a forced cut) is "moved" by forcing a cut at
+    /// the new position.  `None` when `pos` is not inside a Japanese run, or
+    /// when there is no kana left to step to.
+    pub fn step_cut(&mut self, pos: usize, forward: bool) -> Option<usize> {
+        let pieces = self.compose(true);
+        let piece = pieces.iter().find(|p| p.lang == Lang::Ja && p.start <= pos && pos <= p.end)?;
+        let keys = self.kana_splits(piece.start, piece.end, &piece.kana).into_iter().map(|s| s.0);
+        let target = if forward { keys.filter(|&k| k > pos).min() } else { keys.filter(|&k| k < pos).max() }?;
+        self.set_cut(pos, false);
+        self.set_cut(target, true);
+        Some(target)
     }
 
     pub fn clear(&mut self) {
@@ -151,6 +250,7 @@ impl<'k> InputSession<'k> {
         self.forced.clear();
         self.nudged.clear();
         self.nudge_pending = false;
+        self.cuts.clear();
         self.choices.clear();
     }
 
@@ -268,9 +368,11 @@ impl<'k> InputSession<'k> {
                     }
                     let kana_chars: Vec<char> = kana.chars().collect();
                     let eos = j >= segs.len();
-                    let cands = convert::convert(self.kb, &kana_chars, prev_rid, eos, self.config.n_best, self.config.use_boundary);
-                    let candidates: Vec<String> = cands.into_iter().map(|c| c.surface).collect();
+                    let kana_cuts = self.kana_cuts(start, end, &kana);
+                    let cands = convert::convert_with_cuts(self.kb, &kana_chars, prev_rid, eos, self.config.n_best, self.config.use_boundary, &kana_cuts);
+                    let candidates: Vec<String> = cands.iter().map(|c| c.surface.clone()).collect();
                     let selected = self.choices.get(&run_index).copied().unwrap_or(0).min(candidates.len() - 1);
+                    let seg_ends = self.piece_segs(start, end, &kana, &cands[selected].segs);
                     pieces.push(Piece {
                         lang: Lang::Ja,
                         start,
@@ -281,6 +383,7 @@ impl<'k> InputSession<'k> {
                         selected,
                         pending: false,
                         confidence: confidence(start, end),
+                        segs: seg_ends,
                     });
                     prev_lang = Some(Lang::Ja);
                     prev_rid = pos.noun_general;
@@ -609,6 +712,7 @@ impl<'k> InputSession<'k> {
         self.buffer.clear();
         self.forced.clear();
         self.nudged.clear();
+        self.cuts.clear();
         self.choices.clear();
         self.after_lang = None;
         pieces

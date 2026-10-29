@@ -557,3 +557,175 @@ fn plain_hiragana_and_katakana_stay_available_whatever_the_cuts() {
     assert!(cut.contains(&"しんかんせん".to_string()), "{cut:?}");
     assert!(cut.contains(&"シンカンセン".to_string()), "{cut:?}");
 }
+
+// ---- the session keeps the cuts and applies them while composing -----------
+
+const SHINKANSEN: &str = "shinkansen"; // しんかんせん; しんかん|せん is keystroke 7
+
+fn shown(e: &Engine) -> String {
+    e.render(&e.compose(true))
+}
+
+#[test]
+fn a_cut_set_on_the_session_reaches_the_converter() {
+    let mut e = Engine::new(model());
+    e.push_str(SHINKANSEN);
+    assert_eq!(shown(&e), "新幹線");
+    assert!(e.set_cut(7, true));
+    assert_ne!(shown(&e), "新幹線", "no word may cross しんかん|せん");
+    assert!(e.set_cut(7, false));
+    assert_eq!(shown(&e), "新幹線", "removing the cut restores the conversion");
+}
+
+#[test]
+fn a_cut_in_the_middle_of_a_mora_or_outside_the_buffer_is_refused_or_ignored() {
+    let mut e = Engine::new(model());
+    e.push_str(SHINKANSEN);
+    assert!(!e.set_cut(0, true), "no boundary before the first keystroke");
+    assert!(!e.set_cut(SHINKANSEN.len(), true), "nor after the last");
+    assert!(!e.set_cut(99, true));
+    // sh|inkansen splits the mora し: storable, but it cannot be applied
+    assert!(e.set_cut(1, true));
+    assert_eq!(shown(&e), "新幹線");
+}
+
+#[test]
+fn a_cut_survives_typing_on() {
+    let mut e = Engine::new(model());
+    e.push_str(SHINKANSEN);
+    e.set_cut(7, true);
+    e.push_str("ni");
+    assert_eq!(e.cuts(), &[7]);
+}
+
+#[test]
+fn backspace_drops_the_cuts_beyond_the_buffer() {
+    let mut e = Engine::new(model());
+    e.push_str(SHINKANSEN);
+    e.set_cut(7, true);
+    e.set_cut(9, true);
+    e.backspace(); // 9 keystrokes left: a cut at 9 would be at the end
+    assert_eq!(e.cuts(), &[7]);
+}
+
+#[test]
+fn commit_and_clear_forget_the_cuts() {
+    let mut e = Engine::new(model());
+    e.push_str(SHINKANSEN);
+    e.set_cut(7, true);
+    e.commit();
+    assert!(e.cuts().is_empty());
+    e.push_str(SHINKANSEN);
+    e.set_cut(7, true);
+    e.clear();
+    assert!(e.cuts().is_empty());
+}
+
+#[test]
+fn a_cut_inside_an_english_word_changes_nothing() {
+    let mut e = Engine::new(model());
+    e.push_str("mitsumoriwoexceldetsukutta");
+    let before = shown(&e);
+    e.set_cut(13, true); // exc|el
+    assert_eq!(shown(&e), before);
+}
+
+#[test]
+fn setting_the_same_cut_twice_is_one_cut() {
+    let mut e = Engine::new(model());
+    e.push_str(SHINKANSEN);
+    e.set_cut(7, true);
+    e.set_cut(7, true);
+    assert_eq!(e.cuts(), &[7]);
+}
+
+// ---- bunsetsu ends of the selected candidate, and moving a boundary ---------
+
+const FURUSATO: &str = "hurusatonoyama"; // ふるさとのやま; ふるさとの|やま is keystroke 10
+
+fn candidates_with_segs(kana: &str, cuts: &[usize]) -> Vec<kswime::Candidate> {
+    let chars: Vec<char> = kana.chars().collect();
+    let kb = model();
+    convert_with_cuts(kb, &chars, kb.pos().bos, true, 8, true, cuts)
+}
+
+#[test]
+fn every_candidate_reports_where_its_bunsetsu_end() {
+    for c in candidates_with_segs("ふるさとのやま", &[]) {
+        let last = c.segs.last().unwrap_or_else(|| panic!("{c:?} has no bunsetsu"));
+        assert_eq!(last.kana, 7, "the last bunsetsu ends the run: {c:?}");
+        assert_eq!(last.chars, c.surface.chars().count(), "{c:?}");
+        assert!(c.segs.windows(2).all(|w| w[0].kana < w[1].kana && w[0].chars < w[1].chars), "{c:?}");
+    }
+}
+
+#[test]
+fn a_forced_cut_is_a_bunsetsu_end_of_the_best_candidate() {
+    let best = &candidates_with_segs("ふるさとのやま", &[5])[0];
+    assert_eq!(best.surface, "ふるさとの山");
+    assert!(best.segs.iter().any(|s| s.kana == 5), "ふるさとの | やま: {:?}", best.segs);
+}
+
+#[test]
+fn plain_kana_candidates_are_one_bunsetsu() {
+    let all = candidates_with_segs("しんかんせん", &[]);
+    let plain = all.iter().find(|c| c.surface == "しんかんせん").expect("plain hiragana is offered");
+    assert_eq!(plain.segs.len(), 1);
+    assert_eq!((plain.segs[0].kana, plain.segs[0].chars), (6, 6));
+}
+
+#[test]
+fn a_japanese_piece_lists_its_bunsetsu_ends_as_keystrokes() {
+    let mut e = Engine::new(model());
+    e.push_str(FURUSATO);
+    e.set_cut(10, true);
+    let p = &e.compose(true)[0];
+    assert_eq!(p.segs.last().map(|s| s.key_end), Some(p.end), "the last bunsetsu ends the piece");
+    assert!(p.segs.iter().any(|s| s.key_end == 10), "the forced cut shows: {:?}", p.segs);
+    assert_eq!(p.segs.last().map(|s| s.chars), Some(p.text.chars().count()));
+}
+
+#[test]
+fn stepping_a_cut_back_moves_it_one_kana_earlier() {
+    let mut e = Engine::new(model());
+    e.push_str(FURUSATO);
+    e.set_cut(10, true);
+    assert_eq!(e.step_cut(10, false), Some(8), "ふるさとの | → ふるさと | の");
+    assert_eq!(e.cuts(), &[8], "the old cut is replaced, not kept");
+}
+
+#[test]
+fn stepping_a_cut_forward_moves_it_one_kana_later() {
+    let mut e = Engine::new(model());
+    e.push_str(FURUSATO);
+    e.set_cut(10, true);
+    assert_eq!(e.step_cut(10, true), Some(12), "ふるさとの | やま → ふるさとのや | ま");
+    assert_eq!(e.cuts(), &[12]);
+}
+
+#[test]
+fn stepping_from_a_boundary_the_grammar_made_adds_a_cut() {
+    let mut e = Engine::new(model());
+    e.push_str(FURUSATO);
+    assert!(e.cuts().is_empty());
+    assert_eq!(e.step_cut(10, false), Some(8));
+    assert_eq!(e.cuts(), &[8]);
+}
+
+#[test]
+fn a_cut_cannot_step_out_of_its_run() {
+    let mut e = Engine::new(model());
+    e.push_str(FURUSATO);
+    assert_eq!(e.step_cut(FURUSATO.len(), true), None, "nothing after the last kana");
+    e.push_str("daisuki"); // still one Japanese run, longer
+    assert_eq!(e.step_cut(0, false), None, "nothing before the first kana");
+}
+
+#[test]
+fn stepping_in_english_or_outside_the_buffer_does_nothing() {
+    let mut e = Engine::new(model());
+    e.push_str("mitsumoriwoexceldetsukutta");
+    assert_eq!(e.step_cut(13, true), None, "exc|el is English");
+    assert_eq!(e.step_cut(99, true), None);
+    assert!(e.cuts().is_empty());
+}

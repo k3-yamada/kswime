@@ -223,6 +223,42 @@ pub unsafe extern "C" fn ksw_piece_candidate(e: *mut KswEngine, i: c_int, c: c_i
     e.keep(s)
 }
 
+/// Number of bunsetsu in the selected candidate of Japanese piece `i` (0 for
+/// other pieces).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ksw_piece_segment_count(e: *mut KswEngine, i: c_int) -> c_int {
+    unsafe { &*e }.pieces.get(i as usize).map(|p| p.segs.len() as c_int).unwrap_or(0)
+}
+
+/// Keystroke position where bunsetsu `j` of piece `i` ends (the last one ends
+/// the piece), or -1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ksw_piece_segment_key_end(e: *mut KswEngine, i: c_int, j: c_int) -> c_int {
+    unsafe { &*e }.pieces.get(i as usize).and_then(|p| p.segs.get(j as usize)).map(|s| s.key_end as c_int).unwrap_or(-1)
+}
+
+/// Where bunsetsu `j` of piece `i` ends in the piece's text, in UTF-16 code
+/// units (what `NSRange` counts), or -1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ksw_piece_segment_utf16_end(e: *mut KswEngine, i: c_int, j: c_int) -> c_int {
+    let e = unsafe { &*e };
+    let Some(p) = e.pieces.get(i as usize) else { return -1 };
+    let Some(s) = p.segs.get(j as usize) else { return -1 };
+    p.text.chars().take(s.chars).map(char::len_utf16).sum::<usize>() as c_int
+}
+
+/// Move the bunsetsu boundary at keystroke `pos` of a Japanese run by one
+/// kana (`forward` = 1: later, 0: earlier) and return its new keystroke
+/// position, or -1 when there is no kana left to step to.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ksw_step_cut(e: *mut KswEngine, pos: c_int, forward: c_int) -> c_int {
+    let e = unsafe { &mut *e };
+    if pos < 0 {
+        return -1;
+    }
+    e.session.step_cut(pos as usize, forward != 0).map(|p| p as c_int).unwrap_or(-1)
+}
+
 /// P(English) of keystroke `i` from the last `ksw_compose`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ksw_p_en(e: *mut KswEngine, i: c_int) -> f64 {
@@ -282,6 +318,19 @@ pub unsafe extern "C" fn ksw_nudge_language(e: *mut KswEngine, start: c_int, end
     }
     let l = if lang == 1 { Lang::En } else { Lang::Ja };
     e.session.nudge_language(start as usize, end as usize, l);
+}
+
+/// Force (`on` = 1) or remove (`on` = 0) a bunsetsu boundary before keystroke
+/// `pos` inside a Japanese run.  Returns 1 when `pos` is inside the buffer,
+/// else 0.  A cut that is not on a kana boundary of a Japanese run is kept
+/// but has no effect.  Committing or clearing forgets all cuts.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ksw_set_cut(e: *mut KswEngine, pos: c_int, on: c_int) -> c_int {
+    let e = unsafe { &mut *e };
+    if pos < 0 {
+        return 0;
+    }
+    e.session.set_cut(pos as usize, on != 0) as c_int
 }
 
 /// One explanation line per decided token of the last `ksw_compose`,

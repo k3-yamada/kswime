@@ -66,11 +66,30 @@ impl Analysis {
     }
 }
 
+/// Where one bunsetsu of a candidate ends, counted from the start of the run:
+/// in kana of the reading and in characters of the surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegEnd {
+    pub kana: usize,
+    pub chars: usize,
+}
+
 /// A conversion candidate for a Japanese run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub surface: String,
     pub cost: i64,
+    /// the bunsetsu of this candidate (the last one ends the run); a plain
+    /// kana or loanword candidate is a single bunsetsu
+    pub segs: Vec<SegEnd>,
+}
+
+/// Where one bunsetsu of a piece's selected candidate ends: as a keystroke
+/// position in the buffer and in characters of `Piece::text`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PieceSeg {
+    pub key_end: usize,
+    pub chars: usize,
 }
 
 /// One piece of the composed line as a front-end shows it.
@@ -89,10 +108,12 @@ pub struct Piece {
     pub pending: bool,
     /// 0 = decided with high confidence, 1 = tentative, 2 = undecided
     pub confidence: u8,
+    /// bunsetsu ends of the selected candidate (Japanese runs only; empty otherwise)
+    pub segs: Vec<PieceSeg>,
 }
 
 impl Piece {
     pub fn simple(lang: Lang, start: usize, end: usize, text: String, pending: bool) -> Piece {
-        Piece { lang, start, end, text, kana: String::new(), candidates: Vec::new(), selected: 0, pending, confidence: 0 }
+        Piece { lang, start, end, text, kana: String::new(), candidates: Vec::new(), selected: 0, pending, confidence: 0, segs: Vec::new() }
     }
 }

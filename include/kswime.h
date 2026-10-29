@@ -70,6 +70,22 @@ void        ksw_force_language(KswEngine *e, int32_t start, int32_t end, int32_t
  * The adjustment is learned once, on ksw_commit or the next ksw_push;
  * ksw_backspace and ksw_clear discard it. */
 void        ksw_nudge_language(KswEngine *e, int32_t start, int32_t end, int32_t lang);
+/* Force (on=1) or remove (on=0) a bunsetsu boundary before keystroke `pos`
+ * inside a Japanese run.  Returns 1 when pos is inside the buffer, else 0.
+ * A cut that is not on a kana boundary of a Japanese run is kept but has no
+ * effect.  ksw_commit and ksw_clear forget all cuts. */
+int32_t     ksw_set_cut(KswEngine *e, int32_t pos, int32_t on);
+/* Move the bunsetsu boundary at keystroke `pos` of a Japanese run by one kana
+ * (forward=1: later, 0: earlier); returns its new keystroke position, or -1
+ * when there is no kana left to step to. */
+int32_t     ksw_step_cut(KswEngine *e, int32_t pos, int32_t forward);
+
+/* bunsetsu of the selected candidate of Japanese piece i (0 for other pieces).
+ * The last one ends the piece.  utf16_end counts UTF-16 code units of the
+ * piece's text, as NSRange does. */
+int32_t     ksw_piece_segment_count(KswEngine *e, int32_t i);
+int32_t     ksw_piece_segment_key_end(KswEngine *e, int32_t i, int32_t j);    /* -1 if none */
+int32_t     ksw_piece_segment_utf16_end(KswEngine *e, int32_t i, int32_t j);  /* -1 if none */
 void        ksw_feedback(KswEngine *e, const char *token, int32_t lang);
 const char *ksw_export_corrections(KswEngine *e);    /* "token\tbias\n"... */
 void        ksw_import_corrections(KswEngine *e, const char *text);

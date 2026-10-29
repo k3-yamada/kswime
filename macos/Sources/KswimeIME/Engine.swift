@@ -21,6 +21,15 @@ struct Piece {
     let pending: Bool
     /// 0 sure, 1 tentative, 2 undecided
     let confidence: Int32
+    /// bunsetsu of the selected candidate (Japanese pieces only)
+    let segments: [Segment]
+
+    /// One bunsetsu: where it ends as a keystroke position, and in UTF-16
+    /// units of `text` (what `NSRange` counts).
+    struct Segment {
+        let keyEnd: Int
+        let utf16End: Int
+    }
 }
 
 final class Engine {
@@ -74,6 +83,11 @@ final class Engine {
             for c in 0..<count {
                 cands.append(String(cString: ksw_piece_candidate(handle, i, c)))
             }
+            var segments: [Piece.Segment] = []
+            for j in 0..<ksw_piece_segment_count(handle, i) {
+                segments.append(Piece.Segment(keyEnd: Int(ksw_piece_segment_key_end(handle, i, j)),
+                                              utf16End: Int(ksw_piece_segment_utf16_end(handle, i, j))))
+            }
             pieces.append(Piece(
                 lang: PieceLang(rawValue: ksw_piece_lang(handle, i)) ?? .neutral,
                 start: Int(ksw_piece_start(handle, i)),
@@ -83,7 +97,8 @@ final class Engine {
                 candidates: cands,
                 selected: Int(ksw_piece_selected(handle, i)),
                 pending: ksw_piece_pending(handle, i) != 0,
-                confidence: ksw_piece_confidence(handle, i)))
+                confidence: ksw_piece_confidence(handle, i),
+                segments: segments))
         }
         return pieces
     }
@@ -110,6 +125,13 @@ final class Engine {
 
     /// Force keystrokes [start, end) to `lang` for this composition and learn.
     func forceLanguage(start: Int, end: Int, lang: PieceLang) { ksw_force_language(handle, Int32(start), Int32(end), lang.rawValue) }
+
+    /// Move the bunsetsu boundary at keystroke `pos` of a Japanese run by one
+    /// kana; the new keystroke position, or nil when there is no kana left.
+    func stepCut(at pos: Int, forward: Bool) -> Int? {
+        let p = ksw_step_cut(handle, Int32(pos), forward ? 1 : 0)
+        return p < 0 ? nil : Int(p)
+    }
 
     /// Move a boundary without learning; the engine learns the final result once.
     func nudgeLanguage(start: Int, end: Int, lang: PieceLang) { ksw_nudge_language(handle, Int32(start), Int32(end), lang.rawValue) }
